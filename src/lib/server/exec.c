@@ -66,7 +66,7 @@ typedef struct {
 	pid_t		pid;
 } fr_child_t;
 
-fr_thread_local_setup(fr_dlist_head_t *, fr_children) /* macro */
+fr_thread_local_setup(fr_dlist_head_t *, fr_children); /* macro */
 
 static void _fr_children_free(void *arg)
 {
@@ -227,7 +227,7 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 		}
 
 		if (request) {
-			da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_EXEC_EXPORT);
+			da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal()), FR_EXEC_EXPORT);
 			if (da) {
 				for (vp = fr_cursor_iter_by_da_init(&cursor, &request->control, da);
 				     vp && (envlen < ((NUM_ELEMENTS(envp)) - 1));
@@ -308,7 +308,7 @@ pid_t radius_start_program(char const *cmd, REQUEST *request, bool exec_wait,
 		 *	If we are debugging, then we want the error
 		 *	messages to go to the STDERR of the server.
 		 */
-		if (!RDEBUG_ENABLED) dup2(devnull, STDERR_FILENO);
+		if (!request || !RDEBUG_ENABLED) dup2(devnull, STDERR_FILENO);
 		close(devnull);
 
 		/*

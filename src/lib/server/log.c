@@ -43,7 +43,7 @@ RCSID("$Id$")
 #include <sys/file.h>
 #include <pthread.h>
 
-fr_thread_local_setup(TALLOC_CTX *, fr_vlog_request_pool)
+fr_thread_local_setup(TALLOC_CTX *, fr_vlog_request_pool); /* macro */
 
 /** Syslog facility table
  *
@@ -184,7 +184,7 @@ size_t log_str2dst_len = NUM_ELEMENTS(log_str2dst);
 
 static char const spaces[] = "                                                                                                                        ";
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t log_dict[];
 fr_dict_autoload_t log_dict[] = {
@@ -246,9 +246,9 @@ inline bool log_rdebug_enabled(fr_log_lvl_t lvl, REQUEST *request)
 /** Cleanup the memory pool used by vlog_request
  *
  */
-static void _fr_vlog_request_pool_free(UNUSED void *arg)
+static void _fr_vlog_request_pool_free(void *arg)
 {
-	TALLOC_FREE(fr_vlog_request_pool);
+	talloc_free(arg);
 }
 
 /** Send a log message to its destination, possibly including fields from the request
@@ -286,6 +286,7 @@ void vlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
 	 *	No output means no output.
 	 */
 	if (!log_dst) return;
+	if (!log_rdebug_enabled(lvl, request)) return;
 
 	/*
 	 *	Allocate a thread local, 4k pool so we don't
@@ -302,8 +303,6 @@ void vlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
 	}
 
 	filename = log_dst->file;
-
-	if (!log_rdebug_enabled(lvl, request)) return;
 
 	/*
 	 *	Debug messages get treated specially.
@@ -382,7 +381,7 @@ void vlog_request(fr_log_type_t type, fr_log_lvl_t lvl, REQUEST *request,
 		p = strrchr(exp, FR_DIR_SEP);
 		if (p) {
 			*p = '\0';
-			if (rad_mkdir(exp, S_IRWXU, -1, -1) < 0) {
+			if (fr_mkdir(NULL, exp, -1, S_IRWXU, NULL, NULL) < 0) {
 				ERROR("Failed creating %s: %s", exp, fr_syserror(errno));
 				talloc_free(exp);
 				return;

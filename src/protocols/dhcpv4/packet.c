@@ -92,7 +92,7 @@ uint8_t const *fr_dhcpv4_packet_get_option(dhcp_packet_t const *packet, size_t p
 
 		if (data[0] == da->attr) return data;
 
-		if (data[0] == 52) { /* overload sname and/or file */
+		if ((data[0] == 52) && (data[1] > 0)) { /* overload sname and/or file */
 			overload = data[2];
 		}
 
@@ -209,8 +209,7 @@ int fr_dhcpv4_packet_decode(RADIUS_PACKET *packet)
 		 *	Loop over all the options data
 		 */
 		while (p < end) {
-			len = fr_dhcpv4_decode_option(packet, &cursor, dict_dhcpv4,
-						      p, ((end - p) > UINT8_MAX) ? UINT8_MAX : (end - p), NULL);
+			len = fr_dhcpv4_decode_option(packet, &cursor, dict_dhcpv4, p, (end - p), NULL);
 			if (len <= 0) {
 				fr_pair_list_free(&head);
 				return len;
@@ -286,7 +285,7 @@ int fr_dhcpv4_packet_decode(RADIUS_PACKET *packet)
 			 *	Vendor is "MSFT 98"
 			 */
 			vp = fr_pair_find_by_da(head, attr_dhcp_vendor_class_identifier, TAG_ANY);
-			if (vp && (strcmp(vp->vp_strvalue, "MSFT 98") == 0)) {
+			if (vp && (vp->vp_length == 7) && (memcmp(vp->vp_strvalue, "MSFT 98", 7) == 0)) {
 				vp = fr_pair_find_by_da(head, attr_dhcp_flags, TAG_ANY);
 
 				/*

@@ -23,14 +23,15 @@
  *
  * @copyright 2017 The FreeRADIUS project
  */
+#include <freeradius-devel/io/base.h>
 #include <freeradius-devel/server/cf_util.h>
 #include <freeradius-devel/server/dl_module.h>
-#include <freeradius-devel/io/base.h>
+#include <freeradius-devel/server/virtual_servers.h>
 
 /*
  *	src/lib/io/schedule.h
  */
-typedef struct fr_schedule_t fr_schedule_t;
+typedef struct fr_schedule_s fr_schedule_t;
 
 /** Bootstrap the #fr_app_t
  *
@@ -102,6 +103,8 @@ typedef void (*fr_app_event_list_set_t)(fr_listen_t *li, fr_event_list_t *el, vo
 typedef struct {
 	DL_MODULE_COMMON;				//!< Common fields to all loadable modules.
 
+	fr_dict_t const			**dict;		//!< default dictionary for this application.
+
 	fr_app_bootstrap_t		bootstrap;	//!< Bootstrap function to allow the fr_app_t to load the
 							///< various submodules it requires.
 
@@ -140,7 +143,7 @@ typedef struct {
 
 	fr_app_bootstrap_t		bootstrap;
 	fr_app_instantiate_t		instantiate;
-	fr_io_process_t			entry_point;	//!< Entry point into the protocol subtype's state machine.
+	module_method_t			entry_point;	//!< Entry point into the protocol subtype's state machine.
 	virtual_server_compile_t const	*compile_list;	//!< list of processing sections
 } fr_app_worker_t;
 

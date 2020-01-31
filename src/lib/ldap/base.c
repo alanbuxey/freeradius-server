@@ -21,7 +21,7 @@
  *
  * @author Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  * @copyright 2015 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
- * @copyright 2013-2015 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2013-2015 Network RADIUS SARL (legal@networkradius.com)
  * @copyright 2013-2015 The FreeRADIUS Server Project.
  */
 RCSID("$Id$")
@@ -637,6 +637,10 @@ fr_ldap_rcode_t fr_ldap_search(LDAPMessage **result, REQUEST *request,
 	status = fr_ldap_result(&our_result, NULL, *pconn, msgid, 1, dn, 0);
 	switch (status) {
 	case LDAP_PROC_SUCCESS:
+		break;
+
+	case LDAP_PROC_BAD_DN:
+		ROPTIONAL(RDEBUG2, DEBUG2, "DN %s does not exist", dn);
 		break;
 
 	default:

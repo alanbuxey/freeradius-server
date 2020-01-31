@@ -21,7 +21,7 @@
  * @author Arran Cudbard-Bell \<a.cudbardb@freeradius.org\>
  *
  * @copyright 2019 The FreeRADIUS server project
- * @copyright 2019 Network RADIUS \<info@networkradius.com\>
+ * @copyright 2019 Network RADIUS \<legal@networkradius.com\>
  */
 RCSID("$Id$")
 #include <freeradius-devel/eap/base.h>
@@ -113,7 +113,7 @@ static inline void section_rcode_ignored(REQUEST *request)
 	switch (request->rcode) {
 	case RLM_MODULE_USER_SECTION_REJECT:
 		RWDEBUG("Ignoring rcode (%s)",
-			fr_table_str_by_value(mod_rcode_table, request->rcode, "<invalid>"));
+			fr_table_str_by_value(rcode_table, request->rcode, "<invalid>"));
 		break;
 
 	default:
@@ -940,7 +940,7 @@ static rlm_rcode_t common_failure_notification_send(eap_aka_sim_common_conf_t *i
 	 */
 	if (after_authentication(eap_aka_sim_session)) {
 		if (!notification_vp) {
-			pair_add_reply(&notification_vp, attr_eap_aka_sim_notification);
+			MEM(pair_add_reply(&notification_vp, attr_eap_aka_sim_notification) >= 0);
 			notification_vp->vp_uint16 = eap_aka_sim_session->failure_type; /* Default will be zero */
 		}
 
@@ -986,7 +986,7 @@ static rlm_rcode_t common_failure_notification_send(eap_aka_sim_common_conf_t *i
 		 *	Only valid code is general failure
 		 */
 		if (!notification_vp) {
-			pair_add_reply(&notification_vp, attr_eap_aka_sim_notification);
+			MEM(pair_add_reply(&notification_vp, attr_eap_aka_sim_notification) >= 0);
 			notification_vp->vp_uint16 = FR_NOTIFICATION_VALUE_GENERAL_FAILURE;
 		/*
 		 *	User supplied failure code
@@ -1920,7 +1920,7 @@ static rlm_rcode_t common_eap_success_enter_resume(void *instance, UNUSED void *
 		case RLM_MODULE_USER_SECTION_REJECT:
 			RWDEBUG("Ignoring rcode (%s) from send EAP-Success { ... } "
 				"as we already sent a Success-Notification",
-				fr_table_str_by_value(mod_rcode_table, request->rcode, "<invalid>"));
+				fr_table_str_by_value(rcode_table, request->rcode, "<invalid>"));
 			RWDEBUG("If you need to force a failure, return an error code from "
 				"send Success-Notification { ... }");
 			break;
@@ -2031,6 +2031,7 @@ static rlm_rcode_t common_reauthentication_send_resume(void *instance, UNUSED vo
 			return common_failure_notification_enter(inst, request, eap_session);
 
 		}
+		/* FALL-THROUGH */
 
 	/*
 	 *	Policy rejected the user
@@ -2097,6 +2098,7 @@ static rlm_rcode_t session_load_resume(void *instance, UNUSED void *thread,
 			return common_failure_notification_enter(inst, request, eap_session);
 
 		}
+		/* FALL-THROUGH */
 
 	/*
 	 *	Policy rejected the user
@@ -3400,7 +3402,7 @@ static rlm_rcode_t common_failure_notification(void *instance, UNUSED void *thre
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 	switch (subtype_vp->vp_uint16) {
 	case FR_SUBTYPE_VALUE_AKA_SIM_NOTIFICATION:
@@ -3470,7 +3472,7 @@ static rlm_rcode_t common_reauthentication(void *instance, UNUSED void *thread, 
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 	/*
 	 *	These aren't allowed in Reauthentication responses as they don't apply:
@@ -3543,7 +3545,7 @@ static rlm_rcode_t aka_challenge(void *instance, UNUSED void *thread, REQUEST *r
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 	switch (subtype_vp->vp_uint16) {
 	case FR_SUBTYPE_VALUE_AKA_CHALLENGE:
@@ -3664,7 +3666,7 @@ static rlm_rcode_t sim_challenge(void *instance, UNUSED void *thread, REQUEST *r
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 	switch (subtype_vp->vp_uint16) {
 	case FR_SUBTYPE_VALUE_SIM_CHALLENGE:
@@ -3730,7 +3732,7 @@ static rlm_rcode_t aka_identity(void *instance, UNUSED void *thread, REQUEST *re
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 
 	switch (subtype_vp->vp_uint16) {
@@ -3838,7 +3840,7 @@ static rlm_rcode_t sim_start(void *instance, UNUSED void *thread, REQUEST *reque
 	if (rcode != RLM_MODULE_OK) return rcode;
 
 #ifdef __clang_analyzer__
-	rad_assert(subtype_vp);
+	if (!subtype_vp) return RLM_MODULE_FAIL;
 #endif
 
 	switch (subtype_vp->vp_uint16) {

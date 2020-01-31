@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2019 The FreeRADIUS Server project and contributors
+# Copyright (C) 2020 The FreeRADIUS Server project and contributors
 # This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
 # Version $Id$
 #
@@ -195,7 +195,6 @@ ATTRIBUTE	MS-CHAP-New-Cleartext-Password		1136	string
 ATTRIBUTE	MS-CHAP-New-NT-Password			1137	octets
 
 #	For default policies
-
 
 ATTRIBUTE	Called-Station-SSID			1139	string
 

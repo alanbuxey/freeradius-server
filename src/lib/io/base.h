@@ -27,7 +27,7 @@ RCSIDH(io_h, "$Id$")
 
 #include <talloc.h>
 
-#include <freeradius-devel/server/base.h>
+#include <freeradius-devel/server/request.h>
 #include <freeradius-devel/util/time.h>
 #include <freeradius-devel/io/channel.h>
 
@@ -36,7 +36,7 @@ extern "C" {
 #endif
 
 typedef struct fr_listen fr_listen_t;
-typedef struct fr_trie_t fr_trie_t;
+typedef struct fr_trie_s fr_trie_t;
 
 typedef struct {
 	uint64_t	in;
@@ -165,7 +165,7 @@ typedef size_t (*fr_io_nak_t)(fr_listen_t *li, void *packet_ctx, uint8_t *const 
  *
  * @param[in] li		the listener for this socket
  * @param[out] packet_ctx	Where to write a newly allocated packet_ctx struct containing request specific data.
- * @param[in,out] recv_time	A pointer to a time when the packet was received
+ * @param[out] recv_time	A pointer to a time when the packet was received
  * @param[in,out] buffer	the buffer where the raw packet will be written to (or read from)
  * @param[in] buffer_len	the length of the buffer
  * @param[out] leftover		bytes left in the buffer after reading a full packet.
@@ -175,7 +175,7 @@ typedef size_t (*fr_io_nak_t)(fr_listen_t *li, void *packet_ctx, uint8_t *const 
  *	- <0 on error
  *	- >=0 length of the data read or written.
  */
-typedef ssize_t (*fr_io_data_read_t)(fr_listen_t *li, void **packet_ctx, fr_time_t **recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, uint32_t *priority, bool *dup);
+typedef ssize_t (*fr_io_data_read_t)(fr_listen_t *li, void **packet_ctx, fr_time_t *recv_time, uint8_t *buffer, size_t buffer_len, size_t *leftover, uint32_t *priority, bool *dup);
 
 /** Write a socket.
  *
@@ -312,14 +312,6 @@ typedef int (*fr_io_signal_t)(fr_listen_t *li);
  *	- <0 on error
  */
 typedef int (*fr_io_close_t)(fr_listen_t *li);
-
-/** Process a request through the transport async state machine.
- *
- * @param[in] instance		Usually the #fr_app_worker_t instance data.
- *				for the #fr_app_worker_t that gave us the
- *				entry point.
- */
-typedef	rlm_rcode_t (*fr_io_process_t)(void const *instance, REQUEST *request);
 
 /*
  *	Structures and definitions for the master IO handler.

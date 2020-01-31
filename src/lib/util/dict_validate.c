@@ -44,7 +44,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	uint32_t all_flags;
 	uint32_t shift_is_root, shift_internal;
 	uint32_t shift_has_tag, shift_array, shift_has_value, shift_concat;
-	uint32_t shift_virtual, shift_encrypt, shift_extra;
+	uint32_t shift_virtual, shift_subtype, shift_extra;
 	fr_dict_attr_t const *v;
 
 	/*
@@ -64,8 +64,8 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	SET_FLAG(virtual);
 	SET_FLAG(extra);
 
-	shift_encrypt = (1 << bit);
-	if (flags->encrypt) {
+	shift_subtype = (1 << bit);
+	if (flags->subtype) {
 		all_flags |= (1 << bit);
 	}
 
@@ -104,6 +104,14 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	 *	Tags can only be used in a few limited situations.
 	 */
 	if (flags->has_tag) {
+		/*
+		 *	0 is internal, 1 is RADIUS, everything else is disallowed.
+		 */
+		if (dict->root->attr > FR_PROTOCOL_RADIUS) {
+			fr_strerror_printf("The 'has_tag' flag can only be used in the RADIUS dictionary");
+			return false;
+		}
+
 		if ((type != FR_TYPE_UINT32) && (type != FR_TYPE_STRING)) {
 			fr_strerror_printf("The 'has_tag' flag can only be used for attributes of type 'integer' "
 					   "or 'string'");
@@ -117,15 +125,10 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 			return false;
 		}
 
-		if (flags->encrypt && (flags->encrypt != FLAG_ENCRYPT_TUNNEL_PASSWORD)) {
-			fr_strerror_printf("The 'has_tag' flag can only be used with 'encrypt=2'");
-			return false;
-		}
-
 		/*
-		 *	"has_tag" can also be used with "encrypt", and "internal" (for testing)
+		 *	"has_tag" can also be used with "encrypt=", and "internal" (for testing)
 		 */
-		ALLOW_FLAG(encrypt);
+		ALLOW_FLAG(subtype);
 		ALLOW_FLAG(internal);
 		FORBID_OTHER_FLAGS(has_tag);
 	}
@@ -151,6 +154,13 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 		case FR_TYPE_OCTETS:
 			break;
 		}
+
+		/*
+		 *	DHCPv6 has arrays of string / octets, prefixed
+		 *	with a uint16 field of "length".  Also, arrays of dns_labels.
+		 */
+		ALLOW_FLAG(extra);
+		ALLOW_FLAG(subtype);
 
 		FORBID_OTHER_FLAGS(array);
 	}
@@ -209,21 +219,18 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	 *	the data type.
 	 */
 	if (flags->extra) {
-		switch (type) {
-		case FR_TYPE_EXTENDED:
-			ALLOW_FLAG(extra);
-			if (all_flags) {
-				fr_strerror_printf("The 'long' flag cannot be used with any other flags.");
-				return false;
-			}
-			break;
+		if ((flags->subtype != FLAG_KEY_FIELD) && (flags->subtype != FLAG_LENGTH_UINT16) &&
+		    (flags->subtype != FLAG_BIT_FIELD)) {
+			fr_strerror_printf("The 'key' and 'length' flags cannot be used with any other flags.");
+			return false;
+		}
 
+		switch (type) {
 		case FR_TYPE_UINT8:
 		case FR_TYPE_UINT16:
 		case FR_TYPE_UINT32:
-			ALLOW_FLAG(extra);
-			if (all_flags) {
-				fr_strerror_printf("The 'key' flag cannot be used with any other flags.");
+			if ((flags->subtype != FLAG_KEY_FIELD) && (flags->subtype != FLAG_BIT_FIELD)) {
+				fr_strerror_printf("Invalid type for extra flag.");
 				return false;
 			}
 
@@ -232,84 +239,59 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 				return false;
 			}
 
+			ALLOW_FLAG(extra);
+			ALLOW_FLAG(subtype);
+			break;
+
+		case FR_TYPE_OCTETS:
+			if (flags->length != 0) {
+				fr_strerror_printf("Cannot use [..] and length=uint16");
+				return false;
+			}
+			/* FALL-THROUGH */
+
+		case FR_TYPE_STRING:
+			if (flags->subtype != FLAG_LENGTH_UINT16) {
+				fr_strerror_printf("Invalid type for extra flag.");
+				return false;
+			}
+
+			ALLOW_FLAG(extra);
+			ALLOW_FLAG(array);
+			ALLOW_FLAG(subtype);
+			break;
+
+		case FR_TYPE_STRUCT:
+			if (flags->subtype != FLAG_LENGTH_UINT16) {
+				fr_strerror_printf("Invalid type for extra flag.");
+				return false;
+			}
+
+			ALLOW_FLAG(extra);
+			/* @todo - allow arrays of struct? */
+			ALLOW_FLAG(subtype);
 			break;
 
 		default:
-			fr_strerror_printf("The 'key' flag can only be used with unsigned integer data types");
+			return -1;
+		}
+
+		if ((flags->subtype == FLAG_LENGTH_UINT16) &&
+		    ((type != FR_TYPE_STRING) && (type != FR_TYPE_OCTETS) && (type != FR_TYPE_STRUCT))) {
+			fr_strerror_printf("The 'length' flag cannot be used used with type %s",
+					   fr_table_str_by_value(fr_value_box_type_table, type, "<UNKNOWN>"));
 			return -1;
 		}
 
 		FORBID_OTHER_FLAGS(extra);
 	}
 
-	if (flags->encrypt) {
-		/*
-		 *	Stupid hacks for MS-CHAP-MPPE-Keys.  The User-Password
-		 *	encryption method has no provisions for encoding the
-		 *	length of the data.  For User-Password, the data is
-		 *	(presumably) all printable non-zero data.  For
-		 *	MS-CHAP-MPPE-Keys, the data is binary crap.  So... we
-		 *	MUST specify a length in the dictionary.
-		 */
-		if ((flags->encrypt == FLAG_ENCRYPT_USER_PASSWORD) && (type != FR_TYPE_STRING)) {
-			if (type != FR_TYPE_OCTETS) {
-				fr_strerror_printf("The 'encrypt=1' flag can only be used with "
-						   "attributes of type 'string'");
-				return false;
-			}
-
-			if (flags->length == 0) {
-				fr_strerror_printf("The 'encrypt=1' flag MUST be used with an explicit length for "
-						   "'octets' data types");
-				return false;
-			}
-		}
-
-		if (flags->encrypt > FLAG_ENCRYPT_OTHER) {
-			fr_strerror_printf("The 'encrypt' flag can only be 0..4");
-			return false;
-		}
-
-		/*
-		 *	The Tunnel-Password encryption method can be used anywhere.
-		 *
-		 *	We forbid User-Password and Ascend-Send-Secret
-		 *	methods in the extended space.
-		 */
-		if ((flags->encrypt != FLAG_ENCRYPT_TUNNEL_PASSWORD) && !flags->internal && !parent->flags.internal) {
-			for (v = parent; v != NULL; v = v->parent) {
-				if (v->type == FR_TYPE_EXTENDED) {
-					fr_strerror_printf("The 'encrypt=%d' flag cannot be used with attributes "
-							   "of type '%s'", flags->encrypt,
-							   fr_table_str_by_value(fr_value_box_type_table, type, "<UNKNOWN>"));
-					return false;
-				}
-			}
-		}
-
-		switch (type) {
-		default:
-		encrypt_fail:
-			fr_strerror_printf("The 'encrypt' flag cannot be used with attributes of type '%s'",
-					   fr_table_str_by_value(fr_value_box_type_table, type, "<UNKNOWN>"));
-			return false;
-
-		case FR_TYPE_TLV:
-		case FR_TYPE_IPV4_ADDR:
-		case FR_TYPE_UINT32:
-		case FR_TYPE_OCTETS:
-			if (flags->encrypt == FLAG_ENCRYPT_ASCEND_SECRET) goto encrypt_fail;
-
-		case FR_TYPE_STRING:
-			break;
-		}
-	}
-
 	/*
-	 *	Force "length" for fixed-size data types.  Check / set
-	 *	"length" and "type_size" for other types.
+	 *	Force "length" for fixed-size data types which aren't
+	 *	bit fields.  Check / set "length" and "type_size" for
+	 *	other types.
 	 */
-	switch (type) {
+	if (!flags->extra || (flags->subtype != FLAG_BIT_FIELD)) switch (type) {
 	case FR_TYPE_UINT8:
 	case FR_TYPE_BOOL:
 		flags->length = 1;
@@ -378,7 +360,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 
 	case FR_TYPE_VENDOR:
 		if (parent->type != FR_TYPE_VSA) {
-			fr_strerror_printf("Attributes of type 'vendor' MUST have a parent of type 'vsa'"
+			fr_strerror_printf("Attributes of type 'vendor' MUST have a parent of type 'vsa' "
 					   "instead of '%s'",
 					   fr_table_str_by_value(fr_value_box_type_table, parent->type, "?Unknown?"));
 			return false;
@@ -462,7 +444,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 			 *	EAP-SIM-RAND uses array
 			 */
 			ALLOW_FLAG(internal);
-			ALLOW_FLAG(encrypt);
+			ALLOW_FLAG(subtype);
 			ALLOW_FLAG(array);
 
 			if (all_flags) {
@@ -552,7 +534,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 					flags->type_size);
 				return false;
 			}
-		} else {
+		} else if (!flags->extra) {
 			if ((type != FR_TYPE_TLV) && (type != FR_TYPE_VENDOR)) {
 				fr_strerror_printf("The 'format=' flag can only be used with attributes of type 'tlv'");
 				return false;
@@ -572,12 +554,8 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	 */
 	switch (parent->type) {
 	case FR_TYPE_STRUCT:
-		if (flags->encrypt != FLAG_ENCRYPT_NONE) {
-			fr_strerror_printf("Attributes inside of a 'struct' MUST NOT be encrypted.");
-			return false;
-		}
-
 		ALLOW_FLAG(extra);
+		ALLOW_FLAG(subtype);
 		if (all_flags) {
 			fr_strerror_printf("Invalid flag for attribute inside of a 'struct'");
 			return false;
@@ -585,17 +563,14 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 
 		if (!attr) break;
 
-		if (*attr == 1) {
-			/*
-			 *	The first child can't be variable length, that's stupid.
-			 *
-			 *	STRUCTs will have their length filled in later.
-			 */
-			if ((type != FR_TYPE_STRUCT) && (flags->length == 0)) {
-				fr_strerror_printf("Children of 'struct' type attributes MUST have fixed length.");
-				return false;
-			}
-		} else {
+		/*
+		 *	If we have keyed structs, then the first
+		 *	member can be variable length.
+		 *
+		 *	For subsequent children, have each one check
+		 *	the previous child.
+		 */
+		if (*attr != 1) {
 			int i;
 			fr_dict_attr_t const *sibling;
 
@@ -606,6 +581,10 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 				return false;
 			}
 
+			/*
+			 *	@todo - allow dns_label encoding as
+			 *	the first member.
+			 */
 			if ((dict_attr_sizes[sibling->type][1] == ~(size_t) 0) &&
 			    !((sibling->type == FR_TYPE_OCTETS) &&
 			      (sibling->flags.length > 0))) {
@@ -627,7 +606,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 						return false;
 					}
 
-					if (!sibling->flags.extra) continue;
+					if (!da_is_key_field(sibling)) continue;
 
 					fr_strerror_printf("Duplicate key attributes '%s' and '%s' in 'struct' type attribute %s are forbidden",
 							   name, sibling->name, parent->name);
@@ -650,7 +629,7 @@ bool dict_attr_flags_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 	case FR_TYPE_UINT8:
 	case FR_TYPE_UINT16:
 	case FR_TYPE_UINT32:
-		if (parent->flags.extra) break;
+		if (da_is_key_field(parent)) break;
 		/* FALL-THROUGH */
 
 	default:
@@ -751,6 +730,11 @@ bool dict_attr_fields_valid(fr_dict_t *dict, fr_dict_attr_t const *parent,
 			}
 		}
 	}
+
+	/*
+	 *	Run protocol-specific validation functions.
+	 */
+	if (dict->attr_valid) return dict->attr_valid(dict, parent, name, *attr, type, flags);
 
 	return true;
 }

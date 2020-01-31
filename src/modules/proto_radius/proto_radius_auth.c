@@ -23,15 +23,23 @@
  * @copyright 2016 Alan DeKok (aland@deployingradius.com)
  */
 #include <freeradius-devel/io/application.h>
-#include <freeradius-devel/server/protocol.h>
-#include <freeradius-devel/server/module.h>
-#include <freeradius-devel/unlang/base.h>
-#include <freeradius-devel/util/dict.h>
-#include <freeradius-devel/util/time.h>
-#include <freeradius-devel/server/state.h>
-#include <freeradius-devel/server/rad_assert.h>
 
 #include <freeradius-devel/protocol/freeradius/freeradius.internal.h>
+
+#include <freeradius-devel/radius/radius.h>
+
+#include <freeradius-devel/server/module.h>
+#include <freeradius-devel/server/pair.h>
+#include <freeradius-devel/server/protocol.h>
+#include <freeradius-devel/server/rad_assert.h>
+#include <freeradius-devel/server/state.h>
+
+#include <freeradius-devel/unlang/base.h>
+
+#include <freeradius-devel/util/dict.h>
+#include <freeradius-devel/util/print.h>
+#include <freeradius-devel/util/rand.h>
+#include <freeradius-devel/util/time.h>
 
 typedef struct {
 	bool		log_stripped_names;
@@ -52,6 +60,19 @@ typedef struct {
 							//!< captures.
 
 	fr_state_tree_t	*state_tree;			//!< State tree to link multiple requests/responses.
+
+	CONF_SECTION	*recv_access_request;
+	void		*unlang_access_request;
+	CONF_SECTION	*send_access_accept;
+	void		*unlang_access_accept;
+	CONF_SECTION	*send_access_reject;
+	void		*unlang_access_reject;
+	CONF_SECTION	*send_access_challenge;
+	void		*unlang_access_challenge;
+	CONF_SECTION	*send_do_not_respond;
+	void		*unlang_do_not_respond;
+	CONF_SECTION	*send_protocol_error;
+	void		*unlang_protocol_error;
 } proto_radius_auth_t;
 
 static const CONF_PARSER session_config[] = {
@@ -82,8 +103,8 @@ static const CONF_PARSER proto_radius_auth_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t proto_radius_auth_dict[];
 fr_dict_autoload_t proto_radius_auth_dict[] = {
@@ -124,6 +145,10 @@ fr_dict_attr_autoload_t proto_radius_auth_dict_attr[] = {
 
 	{ NULL }
 };
+
+
+#define RAUTH(fmt, ...)		log_request(L_AUTH, L_DBG_LVL_OFF, request, __FILE__, __LINE__, fmt, ## __VA_ARGS__)
+
 
 /*
  *	Return a short string showing the terminal server, port
@@ -199,7 +224,7 @@ static void CC_HINT(format (printf, 4, 5)) auth_message(proto_radius_auth_t cons
 			auth_type = fr_pair_find_by_da(request->control, attr_auth_type, TAG_ANY);
 			if (auth_type) {
 				snprintf(password_buff, sizeof(password_buff), "<via Auth-Type = %s>",
-					 fr_dict_enum_alias_by_value(auth_type->da, &auth_type->data));
+					 fr_dict_enum_name_by_value(auth_type->da, &auth_type->data));
 				password_str = password_buff;
 			} else {
 				password_str = "<no User-Password attribute>";
@@ -232,7 +257,7 @@ static void CC_HINT(format (printf, 4, 5)) auth_message(proto_radius_auth_t cons
 	msg = fr_vasprintf(request, fmt, ap);
 	va_end(ap);
 
-	RINFO("%s: [%pV%s%pV] (%s)%s",
+	RAUTH("%s: [%pV%s%pV] (%s)%s",
 	      msg,
 	      username ? &username->data : fr_box_strvalue("<no User-Name attribute>"),
 	      logit ? "/" : "",
@@ -243,7 +268,7 @@ static void CC_HINT(format (printf, 4, 5)) auth_message(proto_radius_auth_t cons
 	talloc_free(msg);
 }
 
-static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
+static rlm_rcode_t mod_process(void *instance, UNUSED void *thread, REQUEST *request)
 {
 	proto_radius_auth_t const	*inst = instance;
 	VALUE_PAIR			*vp, *auth_type;
@@ -251,6 +276,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 	CONF_SECTION			*unlang;
 	fr_dict_enum_t const		*dv = NULL;
 	fr_cursor_t			cursor;
+	void				*instruction;
 
 	REQUEST_VERIFY(request);
 
@@ -263,8 +289,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 
 		request->component = "radius";
 
-		unlang = cf_section_find(request->server_cs, "recv", "Access-Request");
-		if (!unlang) {
+		if (!inst->unlang_access_request) {
 			REDEBUG("Failed to find 'recv Access-Request' section");
 			request->reply->code = FR_CODE_ACCESS_REJECT;
 			goto setup_send;
@@ -278,14 +303,14 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		/*
 		 *	Push the conf section into the unlang stack.
 		 */
-		RDEBUG("Running 'recv Access-Request' from file %s", cf_filename(unlang));
-		unlang_interpret_push_section(request, unlang, RLM_MODULE_REJECT, UNLANG_TOP_FRAME);
+		RDEBUG("Running 'recv Access-Request' from file %s", cf_filename(inst->recv_access_request));
+		unlang_interpret_push_instruction(request, inst->unlang_access_request, RLM_MODULE_REJECT, UNLANG_TOP_FRAME);
 
 		request->request_state = REQUEST_RECV;
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -385,16 +410,16 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		 *	Find the appropriate Auth-Type by name.
 		 */
 		vp = auth_type;
-		dv = fr_dict_enum_by_value(vp->da, &vp->data);
+		dv = fr_dict_dict_enum_by_value(dict_freeradius, vp->da, &vp->data);
 		if (!dv) {
 			REDEBUG2("Unknown Auth-Type %d found: rejecting the user", vp->vp_uint32);
 			request->reply->code = FR_CODE_ACCESS_REJECT;
 			goto setup_send;
 		}
 
-		unlang = cf_section_find(request->server_cs, "authenticate", dv->alias);
+		unlang = cf_section_find(request->server_cs, "authenticate", dv->name);
 		if (!unlang) {
-			REDEBUG2("No 'authenticate %s' section found: rejecting the user", dv->alias);
+			REDEBUG2("No 'authenticate %s' section found: rejecting the user", dv->name);
 			request->reply->code = FR_CODE_ACCESS_REJECT;
 			goto setup_send;
 		}
@@ -406,7 +431,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_PROCESS:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -431,13 +456,6 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		default:
 			RDEBUG2("Failed to authenticate the user");
 			request->reply->code = FR_CODE_ACCESS_REJECT;
-
-			vp = fr_pair_find_by_da(request->packet->vps, attr_module_failure_message, TAG_ANY);
-			if (vp) {
-				auth_message(inst, request, false, "Login incorrect (%pV)", &vp->data);
-			} else {
-				auth_message(inst, request, false, "Login incorrect");
-			}
 
 			/*
 			 *	Maybe the shared secret is wrong?
@@ -478,15 +496,6 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		vp = fr_pair_find_by_da(request->reply->vps, attr_packet_type, TAG_ANY);
 		if (vp) request->reply->code = vp->vp_uint32;
 
-		if (request->reply->code == FR_CODE_ACCESS_ACCEPT) {
-			vp = fr_pair_find_by_da(request->packet->vps, attr_module_success_message, TAG_ANY);
-			if (vp){
-				auth_message(inst, request, true, "Login OK (%pV)", &vp->data);
-			} else {
-				auth_message(inst, request, true, "Login OK");
-			}
-		}
-
 	setup_send:
 		if (!request->reply->code) {
 			vp = fr_pair_find_by_da(request->reply->vps, attr_packet_type, TAG_ANY);
@@ -497,12 +506,6 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 				request->reply->code = FR_CODE_ACCESS_REJECT;
 			}
 		}
-
-		dv = fr_dict_enum_by_value(attr_packet_type, fr_box_uint32(request->reply->code));
-		unlang = NULL;
-		if (dv) unlang = cf_section_find(request->server_cs, "send", dv->alias);
-
-		if (!unlang) goto send_reply;
 
 	rerun_nak:
 		/*
@@ -521,14 +524,48 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 			fr_pair_value_memcpy(vp, buffer, sizeof(buffer), false);
 		}
 
+		switch (request->reply->code) {
+		case FR_CODE_ACCESS_ACCEPT:
+			unlang = inst->send_access_accept;
+			instruction = inst->unlang_access_accept;
+			break;
+
+		case FR_CODE_ACCESS_REJECT:
+			unlang = inst->send_access_reject;
+			instruction = inst->unlang_access_reject;
+			break;
+
+		case FR_CODE_ACCESS_CHALLENGE:
+			unlang = inst->send_access_challenge;
+			instruction = inst->unlang_access_challenge;
+			break;
+
+		default:
+			request->reply->code = FR_CODE_DO_NOT_RESPOND;
+			/* FALL-THROUGH */
+
+		case FR_CODE_DO_NOT_RESPOND:
+			unlang = inst->send_do_not_respond;
+			instruction = inst->unlang_do_not_respond;
+			break;
+
+		case FR_CODE_PROTOCOL_ERROR:
+			unlang = inst->send_protocol_error;
+			instruction = inst->unlang_protocol_error;
+			break;
+
+		}
+
+		if (!instruction) goto send_reply;
+
 		RDEBUG("Running 'send %s' from file %s", cf_section_name2(unlang), cf_filename(unlang));
-		unlang_interpret_push_section(request, unlang, RLM_MODULE_NOOP, UNLANG_TOP_FRAME);
+		unlang_interpret_push_instruction(request, instruction, RLM_MODULE_NOOP, UNLANG_TOP_FRAME);
 
 		request->request_state = REQUEST_SEND;
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -547,20 +584,20 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 			 *	the NAK section.
 			 */
 			if (request->reply->code != FR_CODE_ACCESS_REJECT) {
-				dv = fr_dict_enum_by_value(attr_packet_type, fr_box_uint32(request->reply->code));
+				dv = fr_dict_dict_enum_by_value(dict_radius, attr_packet_type, fr_box_uint32(request->reply->code));
 
-				RWDEBUG("Failed running 'send %s', trying 'send Access-Reject'", dv ? dv->alias : "???" );
+				RWDEBUG("Failed running 'send %s', trying 'send Access-Reject'", dv ? dv->name : "???" );
 
 				request->reply->code = FR_CODE_ACCESS_REJECT;
 
-				dv = fr_dict_enum_by_value(attr_packet_type, fr_box_uint32(request->reply->code));
+				dv = fr_dict_dict_enum_by_value(dict_radius, attr_packet_type, fr_box_uint32(request->reply->code));
 				unlang = NULL;
 				if (!dv) goto send_reply;
 
-				unlang = cf_section_find(request->server_cs, "send", dv->alias);
+				unlang = cf_section_find(request->server_cs, "send", dv->name);
 				if (unlang) goto rerun_nak;
 
-				RWDEBUG("Not running 'send %s' section as it does not exist", dv->alias);
+				RWDEBUG("Not running 'send %s' section as it does not exist", dv->name);
 			}
 
 			/*
@@ -606,6 +643,25 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 			break;
 		}
 
+		/*
+		 *	Write login OK message when we actually know
+		 *	we're sending an accept.
+		 */
+		if (request->reply->code == FR_CODE_ACCESS_ACCEPT) {
+			vp = fr_pair_find_by_da(request->packet->vps, attr_module_success_message, TAG_ANY);
+			if (vp){
+				auth_message(inst, request, true, "Login OK (%pV)", &vp->data);
+			} else {
+				auth_message(inst, request, true, "Login OK");
+			}
+		} else if (request->reply->code == FR_CODE_ACCESS_REJECT) {
+			vp = fr_pair_find_by_da(request->packet->vps, attr_module_failure_message, TAG_ANY);
+			if (vp) {
+				auth_message(inst, request, false, "Login incorrect (%pV)", &vp->data);
+			} else {
+				auth_message(inst, request, false, "Login incorrect");
+			}
+		}
 		if (request->parent && RDEBUG_ENABLED) {
 			RDEBUG("Sending %s ID %i", fr_packet_codes[request->reply->code], request->reply->id);
 			log_request_pair_list(L_DBG_LVL_1, request, request->reply->vps, "");
@@ -624,31 +680,43 @@ static virtual_server_compile_t compile_list[] = {
 		.name = "recv",
 		.name2 = "Access-Request",
 		.component = MOD_AUTHORIZE,
+		.offset = offsetof(proto_radius_auth_t, recv_access_request),
+		.instruction = offsetof(proto_radius_auth_t, unlang_access_request),
 	},
 	{
 		.name = "send",
 		.name2 = "Access-Accept",
 		.component = MOD_POST_AUTH,
+		.offset = offsetof(proto_radius_auth_t, send_access_accept),
+		.instruction = offsetof(proto_radius_auth_t, unlang_access_accept),
 	},
 	{
 		.name = "send",
 		.name2 = "Access-Challenge",
 		.component = MOD_POST_AUTH,
+		.offset = offsetof(proto_radius_auth_t, send_access_challenge),
+		.instruction = offsetof(proto_radius_auth_t, unlang_access_challenge),
 	},
 	{
 		.name = "send",
 		.name2 = "Access-Reject",
 		.component = MOD_POST_AUTH,
+		.offset = offsetof(proto_radius_auth_t, send_access_reject),
+		.instruction = offsetof(proto_radius_auth_t, unlang_access_reject),
 	},
 	{
 		.name = "send",
 		.name2 = "Do-Not-Respond",
 		.component = MOD_POST_AUTH,
+		.offset = offsetof(proto_radius_auth_t, send_do_not_respond),
+		.instruction = offsetof(proto_radius_auth_t, unlang_do_not_respond),
 	},
 	{
 		.name = "send",
 		.name2 = "Protocol-Error",
 		.component = MOD_POST_AUTH,
+		.offset = offsetof(proto_radius_auth_t, send_protocol_error),
+		.instruction = offsetof(proto_radius_auth_t, unlang_protocol_error),
 	},
 	{
 		.name = "authenticate",

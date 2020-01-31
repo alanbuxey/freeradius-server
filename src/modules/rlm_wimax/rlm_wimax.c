@@ -48,8 +48,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_radius;
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_radius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t rlm_wimax_dict[];
 fr_dict_autoload_t rlm_wimax_dict[] = {
@@ -144,7 +144,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 		p[(5*3)+2] = '\0';
 		fr_pair_value_strsteal(vp, p);
 
-		DEBUG2("Fixing WiMAX binary Calling-Station-Id to %s", vp->vp_strvalue);
+		DEBUG2("Fixing WiMAX binary Calling-Station-Id to %pV", &vp->data);
 		return RLM_MODULE_OK;
 	}
 

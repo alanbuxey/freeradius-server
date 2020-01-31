@@ -228,7 +228,18 @@ int dl_symbol_init(dl_loader_t *dl_loader, dl_t const *dl)
 	     init;
 	     init = fr_cursor_next(&cursor)) {
 		if (init->symbol) {
+			char *p;
+
 			snprintf(buffer, sizeof(buffer), "%s_%s", dl->name, init->symbol);
+
+			/*
+			 *	'-' is not a valid symbol character in
+			 *	C.  But "libfreeradius-radius" is a
+			 *	valid library name.  So we hash things together.
+			 */
+			for (p = buffer; *p != '\0'; p++) {
+				if (*p == '-') *p = '_';
+			}
 
 			sym = dlsym(dl->handle, buffer);
 			if (!sym) {
@@ -252,7 +263,7 @@ int dl_symbol_init(dl_loader_t *dl_loader, dl_t const *dl)
  * @param[in] dl_loader	Tree of dynamically loaded libraries, and callbacks.
  * @param[in] dl	to search for symbols in.
  */
-static void dl_symbol_free(dl_loader_t *dl_loader, dl_t const *dl)
+static int dl_symbol_free(dl_loader_t *dl_loader, dl_t const *dl)
 {
 	dl_symbol_free_t	*free;
 	fr_cursor_t		cursor;
@@ -264,7 +275,9 @@ static void dl_symbol_free(dl_loader_t *dl_loader, dl_t const *dl)
 		if (free->symbol) {
 			char *sym_name = NULL;
 
-			MEM(sym_name = talloc_typed_asprintf(NULL, "%s_%s", dl->name, free->symbol));
+			sym_name = talloc_typed_asprintf(NULL, "%s_%s", dl->name, free->symbol);
+			if (!sym_name) return -1;
+
 			sym = dlsym(dl->handle, sym_name);
 			talloc_free(sym_name);
 
@@ -273,6 +286,8 @@ static void dl_symbol_free(dl_loader_t *dl_loader, dl_t const *dl)
 
 		free->func(dl, sym, free->ctx);
 	}
+
+	return 0;
 }
 
 /** Register a callback to execute when a dl with a particular symbol is first loaded
@@ -301,7 +316,9 @@ int dl_symbol_init_cb_register(dl_loader_t *dl_loader, unsigned int priority,
 
 	dl_symbol_init_cb_unregister(dl_loader, symbol, func);
 
-	MEM(n = talloc(dl_loader, dl_symbol_init_t));
+	n = talloc(dl_loader, dl_symbol_init_t);
+	if (!n) return -1;
+
 	n->priority = priority;
 	n->symbol = symbol;
 	n->func = func;
@@ -359,7 +376,9 @@ int dl_symbol_free_cb_register(dl_loader_t *dl_loader, unsigned int priority,
 
 	dl_symbol_free_cb_unregister(dl_loader, symbol, func);
 
-	MEM(n = talloc(dl_loader, dl_symbol_free_t));
+	n = talloc(dl_loader, dl_symbol_free_t);
+	if (!n) return -1;
+
 	n->priority = priority;
 	n->symbol = symbol;
 	n->func = func;
@@ -455,11 +474,9 @@ dl_t *dl_by_name(dl_loader_t *dl_loader, char const *name, void *uctx, bool uctx
 	 *
 	 *	May help resolve issues with symbol conflicts.
 	 */
-#ifdef RTLD_DEEPBIND
-	if (fr_get_lsan_state() != 1) {
-		flags |= RTLD_DEEPBIND;
-		fr_strerror();	/* clear error buffer */
-	}
+#if defined(RTLD_DEEPBIND) && !defined(__SANITIZE_ADDRESS__)
+	flags |= RTLD_DEEPBIND;
+	fr_strerror();	/* clear error buffer */
 #endif
 
 	/*
@@ -530,6 +547,7 @@ dl_t *dl_by_name(dl_loader_t *dl_loader, char const *name, void *uctx, bool uctx
 		 *	the error from the last dlopen().
 		 */
 		if (!handle) {
+			talloc_free(ctx);
 			fr_strerror_printf("%s", dlerror());
 			return NULL;
 		}
@@ -558,7 +576,7 @@ dl_t *dl_by_name(dl_loader_t *dl_loader, char const *name, void *uctx, bool uctx
 
 	dl = talloc_zero(dl_loader, dl_t);
 	if (!dl) {
-		if(handle) dlclose(handle);
+		dlclose(handle);
 		return NULL;
 	}
 
@@ -578,6 +596,24 @@ dl_t *dl_by_name(dl_loader_t *dl_loader, char const *name, void *uctx, bool uctx
 	if (!dl_loader->defer_symbol_init) dl_symbol_init(dl_loader, dl);
 
 	return dl;
+}
+
+/** "free" a dl handle, possibly actually freeing it, and unloading the library
+ *
+ * This function should be used to explicitly free a dl.
+ *
+ * Because dls are reference counted, it may not actually free the memory
+ * or unload the library, but it will reduce the reference count.
+ *
+ * @return
+ *	- 0	if the dl was actually freed.
+ *	- >0	the number of remaining references.
+ */
+int dl_free(dl_t const *dl)
+{
+	if (!dl) return 0;
+
+	return talloc_decrease_ref_count(talloc_get_type_abort_const(dl, dl_t));
 }
 
 #ifndef NDEBUG

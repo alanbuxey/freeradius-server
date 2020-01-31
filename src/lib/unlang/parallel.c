@@ -47,7 +47,7 @@ static unlang_action_t unlang_parallel_child_done(REQUEST *request, UNUSED rlm_r
 	 *
 	 *	Note that we call unlang_interpret_resumable() here
 	 *	because unlang_parallel_process() calls
-	 *	unlang_interpret_run(), and NOT child->async->process.
+	 *	unlang_interpret(), and NOT child->async->process.
 	 */
 	if (request->parent) {
 		child->state = CHILD_EXITED;
@@ -185,7 +185,7 @@ static unlang_action_t unlang_parallel_process(REQUEST *request, rlm_rcode_t *pr
 			 *	kinds of bad things happen.  We may
 			 *	want to fix that in the future.
 			 */
-			result = unlang_interpret_run(state->children[i].child);
+			result = unlang_interpret(state->children[i].child);
 			if (result == RLM_MODULE_YIELD) {
 				state->children[i].state = CHILD_YIELDED;
 				child_state = CHILD_YIELDED;
@@ -268,13 +268,14 @@ static unlang_action_t unlang_parallel_process(REQUEST *request, rlm_rcode_t *pr
 			 *	Not ready to run.
 			 */
 		case CHILD_YIELDED:
+			rad_assert(state->children[i].child != NULL);
+
 			if (state->children[i].child->runnable_id == -2) { /* see unlang_interpret_resumable() */
 				(void) fr_heap_extract(state->children[i].child->backlog,
 						       state->children[i].child);
 				goto runnable;
 			}
 
-			rad_assert(state->children[i].child != NULL);
 			rad_assert(state->children[i].instruction != NULL);
 			RDEBUG3("parallel child %s is already YIELDED", state->children[i].child->name);
 			child_state = CHILD_YIELDED;
@@ -379,7 +380,6 @@ static void unlang_parallel_signal(REQUEST *request, fr_state_signal_t action)
 	}
 }
 
-
 static unlang_action_t unlang_parallel(REQUEST *request, rlm_rcode_t *presult)
 {
 	unlang_stack_t		*stack = request->stack;
@@ -390,7 +390,6 @@ static unlang_action_t unlang_parallel(REQUEST *request, rlm_rcode_t *presult)
 	int			i;
 
 	g = unlang_generic_to_group(instruction);
-
 	if (!g->num_children) {
 		*presult = RLM_MODULE_NOOP;
 		return UNLANG_ACTION_CALCULATE_RESULT;
@@ -399,7 +398,10 @@ static unlang_action_t unlang_parallel(REQUEST *request, rlm_rcode_t *presult)
 	/*
 	 *	Allocate an array for the children.
 	 */
-	frame->state = state = talloc_zero_size(request, sizeof(unlang_parallel_state_t) + sizeof(state->children[0]) * g->num_children);
+	frame->state = state = talloc_zero_size(request,
+						sizeof(unlang_parallel_state_t) +
+						sizeof(state->children[0]) *
+						g->num_children);
 	if (!state) {
 		*presult = RLM_MODULE_FAIL;
 		return UNLANG_ACTION_CALCULATE_RESULT;

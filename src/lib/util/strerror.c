@@ -52,7 +52,7 @@ typedef struct {
 	fr_log_entry_t	*head;		//!< Head of the current thread local stack of messages.
 } fr_log_buffer_t;
 
-fr_thread_local_setup(fr_log_buffer_t *, fr_strerror_buffer)	/* macro */
+fr_thread_local_setup(fr_log_buffer_t *, fr_strerror_buffer); /* macro */
 static _Thread_local bool logging_stop;	//!< Due to ordering issues we may get errors being
 					///< logged from within other thread local destructors
 					///< which cause a crash on exit if the logging buffer
@@ -336,7 +336,7 @@ void fr_strerror_free(void)
  *  cc strerror.c -g3 -Wall -DTESTING_STRERROR -L/usr/local/lib -L ../../../build/lib/local/.libs/ -lfreeradius-util -I/usr/local/include -I../../ -I../ -include ../include/build.h -l talloc -o test_strerror && ./test_strerror
  */
 #include <stddef.h>
-#include <freeradius-devel/util/cutest.h>
+#include <freeradius-devel/util/acutest.h>
 
 void test_strerror_uninit(void)
 {

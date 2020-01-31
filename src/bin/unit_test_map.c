@@ -22,11 +22,13 @@
 
 RCSID("$Id$")
 
-#include <freeradius-devel/util/base.h>
 
-#include <freeradius-devel/util/conf.h>
+#include <freeradius-devel/server/cf_file.h>
 #include <freeradius-devel/server/modpriv.h>
 #include <freeradius-devel/server/module.h>
+
+#include <freeradius-devel/util/conf.h>
+#include <freeradius-devel/util/base.h>
 
 #include <ctype.h>
 
@@ -44,8 +46,8 @@ do { \
 	goto cleanup; \
 } while (0)
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t unit_test_module_dict[];
 fr_dict_autoload_t unit_test_module_dict[] = {
@@ -189,7 +191,7 @@ int main(int argc, char *argv[])
 	argc -= (optind - 1);
 	argv += (optind - 1);
 
-	if (receipt_file && (fr_file_unlink(receipt_file) < 0)) {
+	if (receipt_file && (fr_unlink(receipt_file) < 0)) {
 		fr_perror("unit_test_map");
 		EXIT_WITH_FAILURE;
 	}
@@ -202,7 +204,7 @@ int main(int argc, char *argv[])
 		EXIT_WITH_FAILURE;
 	}
 
-	if (fr_dict_global_init(autofree, dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(autofree, dict_dir)) {
 		fr_perror("unit_test_map");
 		EXIT_WITH_FAILURE;
 	}
@@ -251,7 +253,7 @@ cleanup:
 
 	fr_strerror_free();
 
-	if (receipt_file && (ret == EXIT_SUCCESS) && (fr_file_touch(receipt_file, 0644) < 0)) {
+	if (receipt_file && (ret == EXIT_SUCCESS) && (fr_touch(NULL, receipt_file, 0644, true, 0755) <= 0)) {
 		fr_perror("unit_test_map");
 		ret = EXIT_FAILURE;
 	}

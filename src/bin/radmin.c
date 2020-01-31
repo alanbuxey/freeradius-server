@@ -61,6 +61,10 @@ DIAG_OFF(strict-prototypes)
 #endif /* HAVE_LIBREADLINE */
 DIAG_ON(strict-prototypes)
 
+#ifdef HAVE_GPERFTOOLS_PROFILER_H
+#include <gperftools/profiler.h>
+#endif
+
 static pthread_t cli_pthread_id;
 static bool cli_started = false;
 static bool stop = false;
@@ -511,6 +515,70 @@ static int cmd_show_debug_level(FILE *fp, UNUSED FILE *fp_err, UNUSED void *ctx,
 	return 0;
 }
 
+#ifdef HAVE_GPERFTOOLS_PROFILER_H
+static int cmd_set_profile_status(UNUSED FILE *fp, FILE *fp_err, UNUSED void *ctx, fr_cmd_info_t const *info)
+{
+	fr_value_box_t box;
+	fr_type_t type = FR_TYPE_BOOL;
+	struct ProfilerState state;
+
+	if (fr_value_box_from_str(NULL, &box, &type, NULL, info->argv[0], strlen(info->argv[0]), '\0', false) < 0) {
+		fprintf(fp_err, "Failed setting profile status '%s' - %s\n", info->argv[0], fr_strerror());
+		return -1;
+	}
+
+	ProfilerGetCurrentState(&state);
+
+	if (box.vb_bool) {
+		char *filename;
+
+		if (state.enabled) {
+			fprintf(fp_err, "Profiling is already on, to file %s\n", state.profile_name);
+			return -1;
+		}
+
+		if (info->argc >= 2) {
+			memcpy(&filename, &info->argv[1], sizeof(filename)); /* const issues */
+		} else {
+			filename = getenv("FR_PROFILE_FILENAME");
+		}
+
+		if (filename) {
+			ProfilerStart(filename);
+		} else {
+			pid_t pid = getpid();
+			MEM(filename = talloc_asprintf(NULL, "/tmp/freeradius-profile.%u.prof", pid));
+			ProfilerStart(filename);
+			talloc_free(filename);
+		}
+
+	} else if (state.enabled) {
+		ProfilerFlush();
+		ProfilerStop();
+	}
+	/*
+	 *	Else profiling is already off, allow the admin to turn
+	 *	it off again without producing an error
+	 */
+
+	return 0;
+}
+
+static int cmd_show_profile_status(FILE *fp, UNUSED FILE *fp_err, UNUSED void *ctx, UNUSED fr_cmd_info_t const *info)
+{
+	struct ProfilerState state;
+	ProfilerGetCurrentState(&state);
+
+	if (!state.enabled) {
+		fprintf(fp, "off\n");
+		return 0;
+	}
+
+	fprintf(fp, "on %s\n", state.profile_name);
+	return 0;
+}
+#endif
+
 static int tab_expand_config_thing(TALLOC_CTX *talloc_ctx, UNUSED void *ctx, fr_cmd_info_t *info, int max_expansions, char const **expansions,
 				   bool want_section)
 {
@@ -955,6 +1023,39 @@ static fr_cmd_table_t cmd_table[] = {
 		.help = "show debug level",
 		.read_only = true,
 	},
+
+#ifdef HAVE_GPERFTOOLS_PROFILER_H
+	{
+		.parent = "set",
+		.name = "profile",
+		.help = "Change profiler settings.",
+		.read_only = false
+	},
+
+	{
+		.parent = "set profile",
+		.name = "status",
+		.syntax = "BOOL [STRING]",
+		.func = cmd_set_profile_status,
+		.help = "Change the profiler status on/off, and potentially the filename",
+		.read_only = false,
+	},
+
+	{
+		.parent = "show",
+		.name = "profile",
+		.help = "Show profile settings.",
+		.read_only = true
+	},
+
+	{
+		.parent = "show profile",
+		.name = "status",
+		.func = cmd_show_profile_status,
+		.help = "show profile status, including filename if profiling is on.",
+		.read_only = true,
+	},
+#endif
 
 	CMD_TABLE_END
 };

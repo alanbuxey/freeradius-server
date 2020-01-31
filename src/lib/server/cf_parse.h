@@ -272,6 +272,11 @@ _Generic((_ct), \
 #define FR_TYPE_SUBSECTION	102
 #define FR_TYPE_VOID		103
 
+/*
+ *	It's a developer option and should be used carefully.
+ */
+#define FR_TYPE_HIDDEN     	0
+
 /** @name #CONF_PARSER type flags
  *
  * These flags should be or'd with another FR_TYPE_* value to create validation
@@ -309,7 +314,7 @@ _Generic((_ct), \
 #define FR_TYPE_ON_READ     		(1 << 23) 			//!< run the parse callback during the file read phase
 
 #define FR_BASE_TYPE(_t)		(0xff & (_t))
-/* @} **/
+/** @} */
 
 #define FR_SIZE_COND_CHECK(_name, _var, _cond, _new)\
 do {\

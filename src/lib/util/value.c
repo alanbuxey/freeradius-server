@@ -920,23 +920,31 @@ int fr_value_box_hton(fr_value_box_t *dst, fr_value_box_t const *src)
 		break;
 
 	case FR_TYPE_INT16:
-		dst->vb_uint16 = htons(src->vb_uint16);	/* Not a typo, uses the union to avoid memcpy */
+		dst->vb_uint16 = htons(src->vb_uint16);
 		break;
 
 	case FR_TYPE_INT32:
-		dst->vb_uint32 = htonl(src->vb_uint32);	/* Not a typo, uses the union to avoid memcpy */
+		dst->vb_uint32 = htonl(src->vb_uint32);
+		break;
+
+	case FR_TYPE_DATE:
+		dst->vb_date = htonll(src->vb_date);
+		break;
+
+	case FR_TYPE_TIME_DELTA:
+		dst->vb_time_delta = htonll(src->vb_time_delta);
 		break;
 
 	case FR_TYPE_INT64:
-		dst->vb_uint64 = htonll(src->vb_uint64);	/* Not a typo, uses the union to avoid memcpy */
+		dst->vb_uint64 = htonll(src->vb_uint64);
 		break;
 
 	case FR_TYPE_FLOAT32:
-		dst->vb_uint32 = htonl(dst->vb_uint32);	/* Not a typo, uses the union to avoid memcpy */
+		dst->vb_uint32 = htonl(dst->vb_uint32);
 		break;
 
 	case FR_TYPE_FLOAT64:
-		dst->vb_uint64 = htonll(dst->vb_uint64);	/* Not a typo, uses the union to avoid memcpy */
+		dst->vb_uint64 = htonll(dst->vb_uint64);
 		break;
 
 	case FR_TYPE_BOOL:
@@ -949,12 +957,10 @@ int fr_value_box_hton(fr_value_box_t *dst, fr_value_box_t const *src)
 	case FR_TYPE_IFID:
 	case FR_TYPE_ETHERNET:
 	case FR_TYPE_SIZE:
-	case FR_TYPE_TIME_DELTA:
 	case FR_TYPE_ABINARY:
 		fr_value_box_copy(NULL, dst, src);
 		return 0;
 
-	case FR_TYPE_DATE:
 	case FR_TYPE_OCTETS:
 	case FR_TYPE_STRING:
 	case FR_TYPE_NON_VALUES:
@@ -1429,15 +1435,20 @@ ssize_t fr_value_box_from_network(TALLOC_CTX *ctx,
 		 */
 	case FR_TYPE_DATE:
 	{
-		int i, length = 4;
-		int precision = FR_TIME_RES_SEC;
+		size_t i, length = 4;
+		fr_time_res_t precision = FR_TIME_RES_SEC;
 		uint64_t date;
-		struct timespec ts;
 
 		if (enumv) {
 			length = enumv->flags.length;
-			precision = enumv->flags.type_size;
+			precision = (fr_time_res_t)enumv->flags.type_size;
 		}
+
+		/*
+		 *	Input data doesn't match what we were told we
+		 *	need.
+		 */
+		if (len != length) return -1;
 
 		/*
 		 *	Just loop over the input data until we reach
@@ -1456,7 +1467,7 @@ ssize_t fr_value_box_from_network(TALLOC_CTX *ctx,
 		switch (precision) {
 		default:
 		case FR_TIME_RES_SEC: /* external seconds, internal nanoseconds */
-			date *= 1000000000;
+			date *= NSEC;
 			break;
 
 		case FR_TIME_RES_MSEC:
@@ -1471,26 +1482,26 @@ ssize_t fr_value_box_from_network(TALLOC_CTX *ctx,
 			break;
 		}
 
-		/*
-		 *	Convert nanoseconds to struct timespec.
-		 */
-		ts.tv_sec = date / NSEC;
-		ts.tv_nsec = date % NSEC;
-
-		dst->vb_date = fr_time_from_timespec(&ts);
+		dst->vb_date = date;
 	}
 		break;
 
 	case FR_TYPE_TIME_DELTA:
 	{
-		int i, length = 4;
-		int precision = FR_TIME_RES_SEC;
+		size_t i, length = 4;
+		fr_time_res_t precision = FR_TIME_RES_SEC;
 		uint64_t date;
 
 		if (enumv) {
 			length = enumv->flags.length;
-			precision = enumv->flags.type_size;
+			precision = (fr_time_res_t)enumv->flags.type_size;
 		}
+
+		/*
+		 *	Input data doesn't match what we were told we
+		 *	need.
+		 */
+		if (len != length) return -1;
 
 		/*
 		 *	Just loop over the input data until we reach
@@ -1553,7 +1564,7 @@ ssize_t fr_value_box_from_network(TALLOC_CTX *ctx,
  * @param dst_enumv	enumeration values.
  * @param src		Input data.
  */
-static int fr_value_box_fixed_size_from_ocets(fr_value_box_t *dst,
+static int fr_value_box_fixed_size_from_octets(fr_value_box_t *dst,
 					      fr_type_t dst_type, fr_dict_attr_t const *dst_enumv,
 					      fr_value_box_t const *src)
 {
@@ -1711,9 +1722,15 @@ static inline int fr_value_box_cast_to_octets(TALLOC_CTX *ctx, fr_value_box_t *d
 	/*
 	 *	Get the raw binary in memory representation
 	 */
-	default:
+	case FR_TYPE_NUMERIC:
 		fr_value_box_hton(dst, src);	/* Flip any uint32 representations */
-		bin = talloc_memdup(ctx, ((uint8_t *)&dst->datum) + fr_value_box_offsets[src->type],
+		bin = talloc_memdup(ctx, ((uint8_t const *)&dst->datum) + fr_value_box_offsets[src->type],
+				    fr_value_box_field_sizes[src->type]);
+		break;
+
+	default:
+		/* Not the same talloc_memdup call as above.  The above memdup reads data from the dst */
+		bin = talloc_memdup(ctx, ((uint8_t const *)&src->datum) + fr_value_box_offsets[src->type],
 				    fr_value_box_field_sizes[src->type]);
 		break;
 	}
@@ -2148,7 +2165,7 @@ static inline int fr_value_box_cast_to_ethernet(TALLOC_CTX *ctx, fr_value_box_t 
 		break;
 
 	case FR_TYPE_OCTETS:
-		if (fr_value_box_fixed_size_from_ocets(dst, dst_type, dst_enumv, src) < 0) return -1;
+		if (fr_value_box_fixed_size_from_octets(dst, dst_type, dst_enumv, src) < 0) return -1;
 		break;
 
 	case FR_TYPE_UINT64: {
@@ -2241,7 +2258,7 @@ static inline int fr_value_box_cast_to_uint8(TALLOC_CTX *ctx, fr_value_box_t *ds
 		break;
 
 	case FR_TYPE_OCTETS:
-		if (fr_value_box_fixed_size_from_ocets(dst, dst_type, dst_enumv, src) < 0) return -1;
+		if (fr_value_box_fixed_size_from_octets(dst, dst_type, dst_enumv, src) < 0) return -1;
 		break;
 
 	default:
@@ -2299,7 +2316,7 @@ static inline int fr_value_box_cast_to_uint16(TALLOC_CTX *ctx, fr_value_box_t *d
 		break;
 
 	case FR_TYPE_OCTETS:
-		if (fr_value_box_fixed_size_from_ocets(dst, dst_type, dst_enumv, src) < 0) return -1;
+		if (fr_value_box_fixed_size_from_octets(dst, dst_type, dst_enumv, src) < 0) return -1;
 		break;
 
 	default:
@@ -2466,7 +2483,7 @@ static inline int fr_value_box_cast_to_uint32(TALLOC_CTX *ctx, fr_value_box_t *d
 		break;
 
 	case FR_TYPE_OCTETS:
-		if (fr_value_box_fixed_size_from_ocets(dst, dst_type, dst_enumv, src) < 0) return -1;
+		if (fr_value_box_fixed_size_from_octets(dst, dst_type, dst_enumv, src) < 0) return -1;
 		break;
 
 	default:
@@ -2610,7 +2627,7 @@ static inline int fr_value_box_cast_to_uint64(TALLOC_CTX *ctx, fr_value_box_t *d
 		break;
 
 	case FR_TYPE_OCTETS:
-		if (fr_value_box_fixed_size_from_ocets(dst, dst_type, dst_enumv, src) < 0) return -1;
+		if (fr_value_box_fixed_size_from_octets(dst, dst_type, dst_enumv, src) < 0) return -1;
 		break;
 
 	default:
@@ -2639,7 +2656,7 @@ static inline int fr_value_box_cast_to_uint64(TALLOC_CTX *ctx, fr_value_box_t *d
  * @param dst_type	to cast to.
  * @param dst_enumv	Aliases for values contained within this fr_value_box_t.
  *			If #fr_value_box_t is passed to #fr_value_box_asprint
- *			aliases will be printed instead of actual value.
+ *			names will be printed instead of actual value.
  * @param src		Input data.
  * @return
  *	- 0 on success.
@@ -2666,7 +2683,7 @@ int fr_value_box_cast(TALLOC_CTX *ctx, fr_value_box_t *dst,
 	 *
 	 *	The theory here is that the attribute value isn't
 	 *	being converted into its presentation format and
-	 *	re-parsed, and the enumv aliases only get applied
+	 *	re-parsed, and the enumv names only get applied
 	 *	when converting internal values to/from strings,
 	 *	so it's OK just to swap out the enumv.
 	 *
@@ -2935,7 +2952,7 @@ int fr_value_box_cast(TALLOC_CTX *ctx, fr_value_box_t *dst,
  * @param dst_type	to cast to.
  * @param dst_enumv	Aliases for values contained within this fr_value_box_t.
  *			If #fr_value_box_t is passed to #fr_value_box_asprint
- *			aliases will be printed instead of actual value.
+ *			names will be printed instead of actual value.
  * @return
  *	- 0 on success.
  *	- -1 on failure.
@@ -3914,7 +3931,7 @@ static int fr_value_box_from_integer_str(fr_value_box_t *dst, fr_type_t dst_type
  * @param[in] ctx		to alloc strings in.
  * @param[out] dst		where to write parsed value.
  * @param[in,out] dst_type	of value data to create/dst_type of value created.
- * @param[in] dst_enumv		fr_dict_attr_t with string aliases for uint32 values.
+ * @param[in] dst_enumv		fr_dict_attr_t with string names for uint32 values.
  * @param[in] in		String to convert. Binary safe for variable length values
  *				if len is provided.
  * @param[in] inlen		may be < 0 in which case strlen(len) is used to determine
@@ -3946,39 +3963,39 @@ int fr_value_box_from_str(TALLOC_CTX *ctx, fr_value_box_t *dst,
 	ret = dict_attr_sizes[*dst_type][1];	/* Max length */
 
 	/*
-	 *	Lookup any aliases before continuing
+	 *	Lookup any names before continuing
 	 */
 	if (dst_enumv) {
 		char		*tmp = NULL;
-		char		*alias;
-		size_t		alias_len;
+		char		*name;
+		size_t		name_len;
 		fr_dict_enum_t	*enumv;
 
 		if (len > (sizeof(buffer) - 1)) {
 			tmp = talloc_array(NULL, char, len + 1);
 			if (!tmp) return -1;
 
-			alias_len = fr_value_str_unescape((uint8_t *)tmp, in, len, quote);
-			alias = tmp;
+			name_len = fr_value_str_unescape((uint8_t *)tmp, in, len, quote);
+			name = tmp;
 		} else {
-			alias_len = fr_value_str_unescape((uint8_t *)buffer, in, len, quote);
-			alias = buffer;
+			name_len = fr_value_str_unescape((uint8_t *)buffer, in, len, quote);
+			name = buffer;
 		}
-		alias[alias_len] = '\0';
+		name[name_len] = '\0';
 
 		/*
-		 *	Check the alias name is valid first before bothering
+		 *	Check the name name is valid first before bothering
 		 *	to look it up.
 		 *
 		 *	Catches any embedded \0 bytes that might cause
 		 *	incorrect results.
 		 */
-		if (fr_dict_valid_name(alias, alias_len) <= 0) {
+		if (fr_dict_valid_name(name, name_len) <= 0) {
 			if (tmp) talloc_free(tmp);
 			goto parse;
 		}
 
-		enumv = fr_dict_enum_by_alias(dst_enumv, alias, alias_len);
+		enumv = fr_dict_enum_by_name(dst_enumv, name, name_len);
 		if (tmp) talloc_free(tmp);
 		if (!enumv) goto parse;
 
@@ -4156,7 +4173,8 @@ parse:
 	case FR_TYPE_STRUCTURAL_EXCEPT_VSA:
 	case FR_TYPE_VENDOR:
 	case FR_TYPE_BAD:
-		fr_strerror_printf("Invalid dst_type %d", *dst_type);
+		fr_strerror_printf("Invalid dst_type %s",
+				   fr_table_str_by_value(fr_value_box_type_table, *dst_type, "<INVALID>"));
 		return -1;
 	}
 
@@ -4372,7 +4390,7 @@ char *fr_value_box_asprint(TALLOC_CTX *ctx, fr_value_box_t const *data, char quo
 		fr_dict_enum_t const	*dv;
 
 		dv = fr_dict_enum_by_value(data->enumv, data);
-		if (dv) return talloc_typed_strdup(ctx, dv->alias);
+		if (dv) return talloc_typed_strdup(ctx, dv->name);
 	}
 
 	switch (data->type) {
@@ -4881,7 +4899,7 @@ size_t fr_value_box_snprint(char *out, size_t outlen, fr_value_box_t const *data
 		fr_dict_enum_t const	*dv;
 
 		dv = fr_dict_enum_by_value(data->enumv, data);
-		if (dv) return strlcpy(out, dv->alias, outlen);
+		if (dv) return strlcpy(out, dv->name, outlen);
 	}
 
 	switch (data->type) {
@@ -4971,13 +4989,13 @@ size_t fr_value_box_snprint(char *out, size_t outlen, fr_value_box_t const *data
 
 	case FR_TYPE_DATE:
 		t = fr_unix_time_to_sec(data->vb_date);
-		(void) localtime_r(&t, &s_tm);
+		(void) gmtime_r(&t, &s_tm);
 
 		if (!data->enumv || (data->enumv->flags.type_size == FR_TIME_RES_SEC)) {
 			if (quote > 0) {
-				len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z", &s_tm);
+				len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S UTC", &s_tm);
 			} else {
-				len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S %Z", &s_tm);
+				len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S UTC", &s_tm);
 			}
 
 		} else {
@@ -5039,6 +5057,7 @@ size_t fr_value_box_snprint(char *out, size_t outlen, fr_value_box_t const *data
 			buf[0] = (char) quote;
 			buf[len] = (char) quote;
 			buf[len + 1] = '\0';
+			len++;	/* Account for trailing quote */
 		}
 		a = buf;
 		break;

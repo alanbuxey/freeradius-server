@@ -242,7 +242,7 @@ struct rlm_sql_grouplist_s {
 	rlm_sql_grouplist_t	*next;
 };
 
-void		*mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);
+void		*sql_mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);
 int		sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **first_pair, rlm_sql_row_t row);
 int		sql_read_realms(rlm_sql_handle_t *handle);
 int		sql_getvpdata(TALLOC_CTX *ctx, rlm_sql_t const *inst, REQUEST *request, rlm_sql_handle_t **handle, VALUE_PAIR **pair, char const *query);
@@ -259,5 +259,5 @@ int		sql_set_user(rlm_sql_t const *inst, REQUEST *request, char const *username)
  */
 fr_trie_t	*sql_state_trie_alloc(TALLOC_CTX *ctx);
 int		sql_state_entries_from_table(fr_trie_t *states, sql_state_entry_t const table[]);
-int		sql_sate_entries_from_cs(fr_trie_t *states, CONF_SECTION *overrides);
+int		sql_state_entries_from_cs(fr_trie_t *states, CONF_SECTION *overrides);
 sql_state_entry_t const		*sql_state_entry_find(fr_trie_t const *states, char const *sql_state);

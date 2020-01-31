@@ -49,7 +49,7 @@ typedef struct {
 } fr_virtual_namespace_t;
 
 typedef struct {
-	dl_module_inst_t		*proto_module;		//!< The proto_* module for a listen section.
+	dl_module_inst_t	*proto_module;		//!< The proto_* module for a listen section.
 	fr_app_t const		*app;			//!< Easy access to the exported struct.
 } fr_virtual_listen_t;
 
@@ -58,6 +58,23 @@ typedef struct {
 	char const		*namespace;		//!< Protocol namespace
 	fr_virtual_listen_t	**listener;		//!< Listeners in this virtual server.
 } fr_virtual_server_t;
+
+static fr_dict_t const *dict_freeradius;
+
+static fr_dict_attr_t const *attr_auth_type;
+
+extern fr_dict_autoload_t virtual_server_dict[];
+fr_dict_autoload_t virtual_server_dict[] = {
+	{ .out = &dict_freeradius, .proto = "freeradius" },
+	{ NULL }
+};
+
+extern fr_dict_attr_autoload_t virtual_server_dict_attr[];
+fr_dict_attr_autoload_t virtual_server_dict_attr[] = {
+	{ .out = &attr_auth_type, .name = "Auth-Type", .type = FR_TYPE_UINT32, .dict = &dict_freeradius },
+
+	{ NULL }
+};
 
 /** Top level structure holding all virtual servers
  *
@@ -80,8 +97,6 @@ static rbtree_t *server_section_name_tree = NULL;
 static int server_section_name_cmp(void const *one, void const *two);
 static int virtual_server_section_register(virtual_server_compile_t const *entry);
 
-static int namespace_on_read(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED void *parent,
-			     CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
 static int listen_on_read(TALLOC_CTX *ctx, void *out, UNUSED void *parent, CONF_ITEM *ci, CONF_PARSER const *rule);
 static int server_on_read(TALLOC_CTX *ctx, void *out, UNUSED void *parent, CONF_ITEM *ci, UNUSED CONF_PARSER const *rule);
 
@@ -120,8 +135,7 @@ static const CONF_PARSER server_config[] = {
 };
 
 static const CONF_PARSER namespace_config[] = {
-	{ FR_CONF_OFFSET("namespace", FR_TYPE_STRING | FR_TYPE_ON_READ, fr_virtual_server_t, namespace),
-	  .func = namespace_on_read },
+	{ FR_CONF_OFFSET("namespace", FR_TYPE_STRING, fr_virtual_server_t, namespace), },
 
 	CONF_PARSER_TERMINATOR
 };
@@ -138,6 +152,37 @@ const CONF_PARSER virtual_servers_config[] = {
 
 	CONF_PARSER_TERMINATOR
 };
+
+typedef struct {
+	bool	do_free;
+	fr_dict_t const *dict;
+} virtual_server_dict_t;
+
+/** Decrement references on dictionaries as the config sections are freed
+ *
+ */
+static int _virtual_server_dict_free(virtual_server_dict_t *cd)
+{
+	if (cd->do_free) {
+		fr_dict_t *dict;
+		memcpy(&dict, &cd->dict, sizeof(dict));
+		fr_dict_free(&dict);
+	}
+	return 0;
+}
+
+
+static void virtual_server_dict_set(CONF_SECTION *server_cs, fr_dict_t const *dict, bool do_free)
+{
+	virtual_server_dict_t *cd;
+
+	cd = talloc_zero(server_cs, virtual_server_dict_t);
+	cd->do_free = do_free;
+	cd->dict = dict;
+	talloc_set_destructor(cd, _virtual_server_dict_free);
+
+	cf_data_add(server_cs, cd, "dictionary", true);
+}
 
 /** dl_open a proto_* module
  *
@@ -157,6 +202,7 @@ static int listen_on_read(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED void 
 	CONF_SECTION		*server_cs = cf_item_to_section(cf_parent(ci));
 	CONF_PAIR		*namespace = cf_pair_find(server_cs, "namespace");
 	dl_module_t const	*module;
+	fr_app_t const		*app;
 
 	if (!namespace) {
 		cf_log_err(listen_cs, "No 'namespace' set for virtual server");
@@ -174,90 +220,12 @@ static int listen_on_read(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED void 
 	}
 	cf_data_add(listen_cs, module, "proto module", true);
 
-	return 0;
-}
-
-/** Decrement references on dictionaries as the config sections are freed
- *
- */
-static int _virtual_server_dict_free(fr_dict_t **dict)
-{
-	fr_dict_free(dict);
-	return 0;
-}
-
-/** Load a dictionary for a virtual server and
- *
- * @param[in] server_cs		to set the namespace for.
- * @param[in] proto_dict	to load.
- * @param[in] proto_dir		Path override for dictionary.
- */
-static int virtual_server_namespace_set(CONF_SECTION *server_cs,
-					char const *proto_dict, char const *proto_dir)
-{
-	fr_dict_t	**dict_p;
-	fr_dict_t	*dict = NULL;
-
-	if (fr_dict_protocol_afrom_file(&dict, proto_dict, proto_dir) < 0) return -1;
-
-	dict_p = talloc_zero(NULL, fr_dict_t *);
-	*dict_p = dict;
-	talloc_set_destructor(dict_p, _virtual_server_dict_free);
-
-	cf_data_add(server_cs, dict_p, "dictionary", true);
+	app = (fr_app_t const *) module->common;
+	if (app->dict) virtual_server_dict_set(server_cs, *app->dict, false);
 
 	return 0;
 }
 
-/** Load a protocol dictionary matching the specified namespace
- *
- * @param[in] ctx	to allocate data in.
- * @param[out] out	always NULL
- * @param[in] parent	Base structure address.
- * @param[in] ci	#CONF_SECTION containing the namespace pair.
- * @param[in] rule	unused.
- * @return
- *	- 0 on success.
- *	- -1 on failure.
- */
-static int namespace_on_read(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED void *parent,
-			     CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
-{
-	rbtree_t		*vns_tree = cf_data_value(cf_data_find(virtual_server_root, rbtree_t, "vns_tree"));
-	CONF_PAIR		*namespace_cp = cf_item_to_pair(ci);
-	char const		*namespace_str = cf_pair_value(namespace_cp);
-	char const		*proto_dict = namespace_str;
-	char const		*proto_dir = NULL;
-	CONF_SECTION		*server_cs = cf_item_to_section(cf_parent(ci));
-
-	if (DEBUG_ENABLED4) cf_log_debug(ci, "Initialising namespace \"%s\"", namespace_str);
-
-	/*
-	 *	Doesn't currently work, because namespace
-	 *	*REALLY REALLY* shouldn't be processed on_read,
-	 *	because it doesn't give modules a chance to
-	 *	run their bootstrap methods.
-	 */
-	if (vns_tree) {
-		fr_virtual_namespace_t	*found;
-
-		found = rbtree_finddata(vns_tree,
-					&(fr_virtual_namespace_t){ .namespace = cf_section_name2(server_cs) });
-		proto_dict = found->proto_dict;
-		proto_dir = found->proto_dir;
-	}
-
-	if (virtual_server_namespace_set(server_cs, proto_dict, proto_dir) < 0) {
-#if 1
-		return 0;
-#else
-		cf_log_perr(ci, "Failed initialising namespace \"%s\" - %s", namespace_str, fr_strerror());
-		return -1;
-#endif
-	}
-
-	return 0;
-}
 
 /** Callback to set up listen_on_read
  *
@@ -372,7 +340,7 @@ int virtual_server_section_attribute_define(CONF_SECTION *server_cs, char const 
 		 *	If the value already exists, don't
 		 *	create it again.
 		 */
-		dv = fr_dict_enum_by_alias(da, name2, -1);
+		dv = fr_dict_enum_by_name(da, name2, -1);
 		if (dv) continue;
 
 		cf_log_debug(subcs, "Creating %s = %s", da->name, name2);
@@ -383,7 +351,7 @@ int virtual_server_section_attribute_define(CONF_SECTION *server_cs, char const 
 		 *	this code, so it doesn't matter.  The only
 		 *	requirement is that it's unique.
 		 */
-		if (fr_dict_enum_add_alias_next(da, name2) < 0) {
+		if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(da), name2) < 0) {
 			PERROR("Failed adding section value");
 			return -1;
 		}
@@ -551,36 +519,49 @@ int virtual_servers_instantiate(void)
 		size_t			j, listen_cnt;
 		CONF_ITEM		*ci = NULL;
 		CONF_SECTION		*server_cs = virtual_servers[i]->server_cs;
+		CONF_PAIR		*ns;
 
  		listener = virtual_servers[i]->listener;
  		listen_cnt = talloc_array_length(listener);
 
 		DEBUG("Compiling policies in server %s { ... }", cf_section_name2(server_cs));
 
-		if (vns_tree) {
-			fr_virtual_namespace_t	*found;
-			CONF_PAIR		*ns;
+		ns = cf_pair_find(server_cs, "namespace");
+		if (!ns) {
+			cf_log_err(server_cs, "Missing \"namespace\" config item");
+			return -1;
+		}
 
-			ns = cf_pair_find(server_cs, "namespace");
-			if (!ns) {
-				cf_log_err(server_cs, "Missing \"namespace\" config item");
-				return -1;
+		/*
+		 *	If the dictionary was already loaded, e.g. by
+		 *	listen_on_read(), then don't do anything else.
+		 */
+		if (!cf_data_find(server_cs, virtual_server_dict_t, "dictionary")) {
+			fr_dict_t *dict = NULL;
+
+			if (vns_tree) {
+				fr_virtual_namespace_t	*found;
+
+				found = rbtree_finddata(vns_tree, &(fr_virtual_namespace_t){ .namespace = cf_pair_value(ns) });
+				if (found) {
+
+					if (fr_dict_protocol_afrom_file(&dict, found->proto_dict, found->proto_dir) < 0) return -1;
+					virtual_server_dict_set(server_cs, dict, true);
+
+					if ((found->func(server_cs) < 0)) return -1;
+				}
 			}
 
-			found = rbtree_finddata(vns_tree, &(fr_virtual_namespace_t){ .namespace = cf_pair_value(ns) });
-			if (found) {
-				/*
-				 *	Stupid hack because of the on_read
-				 *	namespace stuff.
-				 */
-				if (virtual_server_namespace_set(server_cs,
-								 found->proto_dict,
-								 found-> proto_dir) < 0) {
-					cf_log_perr(ci, "Failed loading dictionary for virtual namespace \"%s\" - %s",
-						    cf_pair_value(ns), fr_strerror());
-					return -1;
-				}
-				if ((found->func(server_cs) < 0)) return -1;
+			/*
+			 *	Maybe it's a valid namespace, but we
+			 *	just don't have a dictionary for it.
+			 *	Load the dictionary now.
+			 */
+			if (!dict) {
+				char const *value = cf_pair_value(ns);
+
+				if (fr_dict_protocol_afrom_file(&dict, value, NULL) < 0) return -1;
+				virtual_server_dict_set(server_cs, dict, true);
 			}
 		}
 
@@ -905,18 +886,21 @@ int virtual_namespace_register(char const *namespace,
  *	- NULL on error.
  *	- Namespace on success.
  */
-fr_dict_t *virtual_server_namespace(char const *virtual_server)
+fr_dict_t const *virtual_server_namespace(char const *virtual_server)
 {
 	CONF_SECTION const *server_cs;
 	CONF_DATA const *cd;
+	virtual_server_dict_t *dict;
 
 	server_cs = virtual_server_find(virtual_server);
 	if (!server_cs) return NULL;
 
-	cd = cf_data_find(server_cs, fr_dict_t *, "dictionary");
+	cd = cf_data_find(server_cs, virtual_server_dict_t, "dictionary");
 	if (!cd) return NULL;
 
-	return *(fr_dict_t **) cf_data_value(cd);
+	dict = (virtual_server_dict_t *) cf_data_value(cd);
+	
+	return dict->dict;
 }
 
 /** Verify that a given virtual_server exists and is of a particular namespace
@@ -973,6 +957,16 @@ int virtual_servers_init(CONF_SECTION *config)
 {
 	virtual_server_root = config;
 
+	if (fr_dict_autoload(virtual_server_dict) < 0) {
+		PERROR("%s", __FUNCTION__);
+		return -1;
+	}
+	if (fr_dict_attr_autoload(virtual_server_dict_attr) < 0) {
+		PERROR("%s", __FUNCTION__);
+		fr_dict_autofree(virtual_server_dict);
+		return -1;
+	}
+
 	MEM(listen_addr_root = rbtree_create(NULL, listen_addr_cmp, NULL, RBTREE_FLAG_NONE));
 	MEM(server_section_name_tree = rbtree_create(NULL, server_section_name_cmp, NULL, RBTREE_FLAG_NONE));
 
@@ -983,9 +977,11 @@ int virtual_servers_free(void)
 {
 	TALLOC_FREE(listen_addr_root);
 	TALLOC_FREE(server_section_name_tree);
+
+	fr_dict_autofree(virtual_server_dict);
+
 	return 0;
 }
-
 
 /**
  */
@@ -998,6 +994,7 @@ rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
 	fr_dict_attr_t const *da;
 	fr_dict_enum_t const *dv;
 	CONF_SECTION	*subcs;
+	fr_dict_t const	*dict_internal;
 
 	rad_assert(request->server_cs != NULL);
 
@@ -1015,7 +1012,7 @@ rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
 	if (!cs) {
 		RDEBUG2("Empty 'authenticate' section in virtual server \"%s\".  Using default return value (%s)",
 			cf_section_name2(request->server_cs),
-			fr_table_str_by_value(mod_rcode_table, RLM_MODULE_REJECT, "<invalid>"));
+			fr_table_str_by_value(rcode_table, RLM_MODULE_REJECT, "<invalid>"));
 		return RLM_MODULE_REJECT;
 	}
 
@@ -1027,21 +1024,22 @@ rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
 		return RLM_MODULE_REJECT;
 	}
 
-	da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_AUTH_TYPE);
+	dict_internal = fr_dict_internal();
+	da = fr_dict_attr_child_by_num(fr_dict_root(dict_internal), FR_AUTH_TYPE);
 	if (!da) return RLM_MODULE_FAIL;
 
-	dv = fr_dict_enum_by_value(da, fr_box_uint32((uint32_t) auth_type));
+	dv = fr_dict_dict_enum_by_value(dict_internal, da, fr_box_uint32((uint32_t) auth_type));
 	if (!dv) return RLM_MODULE_FAIL;
 
-	subcs = cf_section_find(cs, da->name, dv->alias);
+	subcs = cf_section_find(cs, da->name, dv->name);
 	if (!subcs) {
 		RDEBUG2("%s %s sub-section not found.  Using default return values.",
-			da->name, dv->alias);
+			da->name, dv->name);
 		return RLM_MODULE_REJECT;
 	}
 
 	RDEBUG("Running %s %s from file %s",
-	       da->name, dv->alias, cf_filename(subcs));
+	       da->name, dv->name, cf_filename(subcs));
 	cs = subcs;
 
 	/*
@@ -1054,13 +1052,46 @@ rlm_rcode_t process_authenticate(int auth_type, REQUEST *request)
 	request->module = NULL;
 	request->component = "authenticate";
 
-	rcode = unlang_interpret(request, cs, RLM_MODULE_REJECT);
+	rcode = unlang_interpret_section(request, cs, RLM_MODULE_REJECT);
 
 	request->component = component;
 	request->module = module;
 	request->server_cs = server_cs;
 
 	return rcode;
+}
+
+rlm_rcode_t virtual_server_process_auth(REQUEST *request, CONF_SECTION *virtual_server,
+					rlm_rcode_t default_rcode,
+					fr_unlang_module_resume_t resume,
+					fr_unlang_module_signal_t signal, void *rctx)
+{
+	VALUE_PAIR	*vp;
+	CONF_SECTION	*auth_cs = NULL;
+	char const	*auth_name;
+
+	vp = fr_pair_find_by_da(request->control, attr_auth_type, TAG_ANY);
+	if (!vp) {
+		RDEBUG2("No &control:Auth-Type found");
+	fail:
+		request->rcode = RLM_MODULE_FAIL;
+		return unlang_module_yield_to_section(request, NULL, RLM_MODULE_FAIL, resume, signal, rctx);
+	}
+
+	auth_name = fr_dict_enum_name_by_value(attr_auth_type, &vp->data);
+	if (!auth_name) {
+		REDEBUG2("Invalid %pP value", vp);
+		goto fail;
+	}
+
+	auth_cs = cf_section_find(virtual_server, "authenticate", auth_name);
+	if (!auth_cs) {
+		REDEBUG2("No authenticate %s { ... } section found in virtual server \"%s\"",
+			 auth_name, cf_section_name2(virtual_server));
+		goto fail;
+	}
+
+	return unlang_module_yield_to_section(request, auth_cs, default_rcode, resume, signal, rctx);
 }
 
 /*
@@ -1084,8 +1115,6 @@ void fr_request_async_bootstrap(REQUEST *request, fr_event_list_t *el)
 	request->async = talloc_zero(request, fr_async_t);
 
 	request->async->channel = NULL;
-	request->async->original_recv_time = NULL;
-/*	request->async->recv_time = fr_time(); */
 	request->async->el = el;
 
 	request->async->listen = NULL;
@@ -1122,8 +1151,8 @@ int fr_app_process_bootstrap(CONF_SECTION *server, dl_module_inst_t **type_submo
 		 *	here by packet name, and doesn't need to root
 		 *	through all of the listeners.
 		 */
-		if (!cf_data_find(server, fr_io_process_t, value)) {
-			fr_io_process_t *process_p = talloc(server, fr_io_process_t);
+		if (!cf_data_find(server, module_method_t, value)) {
+			module_method_t *process_p = talloc(server, module_method_t);
 			*process_p = app_process->entry_point;
 
 			(void) cf_data_add(server, process_p, value, NULL);
@@ -1169,6 +1198,7 @@ int fr_app_process_instantiate(CONF_SECTION *server, dl_module_inst_t **type_sub
 
 	memset(&parse_rules, 0, sizeof(parse_rules));
 	parse_rules.dict_def = virtual_server_namespace(cf_section_name2(server));
+	rad_assert(parse_rules.dict_def != NULL);
 
 	/*
 	 *	Instantiate the process modules
@@ -1190,7 +1220,7 @@ int fr_app_process_instantiate(CONF_SECTION *server, dl_module_inst_t **type_sub
 		 *	Compile the processing sections.
 		 */
 		if (app_process->compile_list &&
-		    (virtual_server_compile_sections(server, app_process->compile_list, &parse_rules) < 0)) {
+		    (virtual_server_compile_sections(server, app_process->compile_list, &parse_rules, type_submodule[i]->data) < 0)) {
 			return -1;
 		}
 
@@ -1202,7 +1232,7 @@ int fr_app_process_instantiate(CONF_SECTION *server, dl_module_inst_t **type_sub
 
 		code = enumv->value->vb_uint32;
 		if (code >= code_max) {
-			cf_log_err(conf, "Invalid type code \"%s\" for \"%s\"", enumv->alias, app_process->name);
+			cf_log_err(conf, "Invalid type code \"%s\" for \"%s\"", enumv->name, app_process->name);
 			return -1;
 		}
 
@@ -1223,10 +1253,12 @@ int fr_app_process_instantiate(CONF_SECTION *server, dl_module_inst_t **type_sub
  *  This function walks down the registration table, compiling each
  *  named section.
  */
-int virtual_server_compile_sections(CONF_SECTION *server, virtual_server_compile_t const *list, vp_tmpl_rules_t const *rules)
+int virtual_server_compile_sections(CONF_SECTION *server, virtual_server_compile_t const *list, vp_tmpl_rules_t const *rules, void *uctx)
 {
-	int i;
+	int i, found;
 	CONF_SECTION *subcs = NULL;
+
+	found = 0;
 
 	/*
 	 *	The sections are in trees, so this isn't as bad as it
@@ -1242,6 +1274,8 @@ int virtual_server_compile_sections(CONF_SECTION *server, virtual_server_compile
 		 *	found.
 		 */
 		if (list[i].name2 != CF_IDENT_ANY) {
+			void *instruction = NULL;
+
 			subcs = cf_section_find(server, list[i].name, list[i].name2);
 			if (!subcs) {
 				DEBUG3("Warning: Skipping %s %s { ... } as it was not found.",
@@ -1249,8 +1283,22 @@ int virtual_server_compile_sections(CONF_SECTION *server, virtual_server_compile
 				continue;
 			}
 
-			rcode = unlang_compile_subsection(subcs, list[i].component, rules);
+			rcode = unlang_compile(subcs, list[i].component, rules, &instruction);
 			if (rcode < 0) return -1;
+
+			/*
+			 *	Cache the CONF_SECTION which was found.
+			 */
+			if (uctx) {
+				if (list[i].offset > 0) {
+					*(CONF_SECTION **) (((uint8_t *) uctx) + list[i].offset) = subcs;
+				}
+				if (list[i].instruction > 0) {
+					*(void **) (((uint8_t *) uctx) + list[i].instruction) = instruction;
+				}
+			}
+
+			found++;
 			continue;
 		}
 
@@ -1267,12 +1315,21 @@ int virtual_server_compile_sections(CONF_SECTION *server, virtual_server_compile
 				return -1;
 			}
 
-			rcode = unlang_compile_subsection(subcs, list[i].component, rules);
+			rcode = unlang_compile(subcs, list[i].component, rules, NULL);
 			if (rcode < 0) return -1;
+
+			/*
+			 *	Note that we don't store the
+			 *	CONF_SECTION here, as it's a wildcard.
+			 *
+			 *	@todo - count number of subsections
+			 *	and store them in an array?
+			 */
+			found++;
 		}
 	}
 
-	return 0;
+	return found;
 }
 
 static int server_section_name_cmp(void const *one, void const *two)
@@ -1413,3 +1470,4 @@ virtual_server_method_t *virtual_server_section_methods(char const *name1, char 
 
 	return entry->methods;
 }
+

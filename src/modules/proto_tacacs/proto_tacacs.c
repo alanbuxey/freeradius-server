@@ -18,7 +18,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
  * @copyright 2017 The FreeRADIUS server project
- * @copyright 2017 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2017 Network RADIUS SARL (legal@networkradius.com)
  */
 #include <freeradius-devel/server/base.h>
 #include <freeradius-devel/server/module.h>
@@ -51,9 +51,9 @@ static const CONF_PARSER proto_tacacs_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
-static fr_dict_t *dict_tacacs;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
+static fr_dict_t const *dict_tacacs;
 
 extern fr_dict_autoload_t proto_tacacs_dict[];
 fr_dict_autoload_t proto_tacacs_dict[] = {
@@ -276,7 +276,7 @@ static void tacacs_running(REQUEST *request, fr_state_signal_t action)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) {
 stop_processing:
@@ -323,7 +323,7 @@ stop_processing:
 			}
 
 			RWDEBUG("Ignoring extra Auth-Type = %s",
-				fr_dict_enum_alias_by_value(auth_type->da, &vp->data));
+				fr_dict_enum_name_by_value(auth_type->da, &vp->data));
 		}
 
 		/*
@@ -361,9 +361,9 @@ stop_processing:
 			goto setup_send;
 		}
 
-		unlang = cf_section_find(request->server_cs, "process", dv->alias);
+		unlang = cf_section_find(request->server_cs, "process", dv->name);
 		if (!unlang) {
-			REDEBUG2("No 'process %s' section found: rejecting the user.", dv->alias);
+			REDEBUG2("No 'process %s' section found: rejecting the user.", dv->name);
 			tacacs_status(request, RLM_MODULE_FAIL);
 			goto setup_send;
 		}
@@ -375,7 +375,7 @@ stop_processing:
 		/* FALL-THROUGH */
 
 	case REQUEST_PROCESS:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) goto stop_processing;
 
@@ -425,7 +425,7 @@ setup_send:
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) goto stop_processing;
 
@@ -617,7 +617,7 @@ static int tacacs_compile_section(CONF_SECTION *server_cs, char const *name1, ch
 
 	cf_log_debug(cs, "Loading %s %s {...}", name1, name2);
 
-	ret = unlang_compile(cs, component, NULL);
+	ret = unlang_compile(cs, component, NULL, NULL);
 	if (ret < 0) {
 		cf_log_err(cs, "Failed compiling '%s %s { ... }' section", name1, name2);
 		return -1;

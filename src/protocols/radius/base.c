@@ -36,8 +36,8 @@ RCSID("$Id$")
 
 static int instance_count = 0;
 
-fr_dict_t *dict_freeradius;
-fr_dict_t *dict_radius;
+fr_dict_t const *dict_freeradius;
+fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t libfreeradius_radius_dict[];
 fr_dict_autoload_t libfreeradius_radius_dict[] = {
@@ -46,6 +46,8 @@ fr_dict_autoload_t libfreeradius_radius_dict[] = {
 	{ NULL }
 };
 
+fr_dict_attr_t const *attr_packet_type;
+fr_dict_attr_t const *attr_packet_authentication_vector;
 fr_dict_attr_t const *attr_raw_attribute;
 fr_dict_attr_t const *attr_chap_challenge;
 fr_dict_attr_t const *attr_chargeable_user_identity;
@@ -56,6 +58,8 @@ fr_dict_attr_t const *attr_vendor_specific;
 
 extern fr_dict_attr_autoload_t libfreeradius_radius_dict_attr[];
 fr_dict_attr_autoload_t libfreeradius_radius_dict_attr[] = {
+	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_radius },
+	{ .out = &attr_packet_authentication_vector, .name = "Packet-Authentication-Vector", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_raw_attribute, .name = "Raw-Attribute", .type = FR_TYPE_OCTETS, .dict = &dict_freeradius },
 	{ .out = &attr_chap_challenge, .name = "CHAP-Challenge", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_chargeable_user_identity, .name = "Chargeable-User-Identity", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
@@ -213,6 +217,7 @@ size_t fr_radius_attr_len(VALUE_PAIR const *vp)
 {
 	switch (vp->vp_type) {
 	case FR_TYPE_VARIABLE_SIZE:
+		if (vp->da->flags.length) return vp->da->flags.length;	/* Variable type with fixed length */
 		return vp->vp_length;
 
 	default:
@@ -1049,7 +1054,7 @@ ssize_t fr_radius_encode(uint8_t *packet, size_t packet_len, uint8_t const *orig
 /** Decode a raw RADIUS packet into VPs.
  *
  */
-ssize_t	fr_radius_decode(TALLOC_CTX *ctx, uint8_t *packet, size_t packet_len, uint8_t const *original,
+ssize_t	fr_radius_decode(TALLOC_CTX *ctx, uint8_t const *packet, size_t packet_len, uint8_t const *original,
 			 char const *secret, UNUSED size_t secret_len, VALUE_PAIR **vps)
 {
 	ssize_t			slen;
@@ -1057,6 +1062,7 @@ ssize_t	fr_radius_decode(TALLOC_CTX *ctx, uint8_t *packet, size_t packet_len, ui
 	uint8_t const		*attr, *end;
 	fr_radius_ctx_t		packet_ctx;
 
+	packet_ctx.tmp_ctx = talloc_init("tmp");
 	packet_ctx.secret = secret;
 	packet_ctx.vector = original + 4;
 
@@ -1071,20 +1077,28 @@ ssize_t	fr_radius_decode(TALLOC_CTX *ctx, uint8_t *packet, size_t packet_len, ui
 	 */
 	while (attr < end) {
 		slen = fr_radius_decode_pair(ctx, &cursor, dict_radius, attr, (end - attr), &packet_ctx);
-		if (slen < 0) return slen;
+		if (slen < 0) {
+			talloc_free(packet_ctx.tmp_ctx);
+			return slen;
+		}
 
 		/*
 		 *	If slen is larger than the room in the packet,
 		 *	all kinds of bad things happen.
 		 */
-		 if (!fr_cond_assert(slen <= (end - attr))) return -1;
+		 if (!fr_cond_assert(slen <= (end - attr))) {
+			 talloc_free(packet_ctx.tmp_ctx);
+			 return -1;
+		 }
 
 		attr += slen;
+		talloc_free_children(packet_ctx.tmp_ctx);
 	}
 
 	/*
 	 *	We've parsed the whole packet, return that.
 	 */
+	talloc_free(packet_ctx.tmp_ctx);
 	return packet_len;
 }
 
@@ -1112,3 +1126,146 @@ void fr_radius_free(void)
 
 	fr_dict_autofree(libfreeradius_radius_dict);
 }
+
+static fr_table_num_ordered_t const subtype_table[] = {
+	{ "encrypt=1",		FLAG_ENCRYPT_USER_PASSWORD },
+	{ "encrypt=2",		FLAG_ENCRYPT_TUNNEL_PASSWORD },
+	{ "encrypt=3",		FLAG_ENCRYPT_ASCEND_SECRET },
+	{ "long",		FLAG_EXTENDED_ATTR },
+
+	/*
+	 *	And some humanly-readable names
+	 */
+	{ "encrypt=Ascend-Secret",	FLAG_ENCRYPT_ASCEND_SECRET },
+	{ "encrypt=Tunnel-Password",	FLAG_ENCRYPT_TUNNEL_PASSWORD },
+	{ "encrypt=User-Password",	FLAG_ENCRYPT_USER_PASSWORD },
+};
+
+static bool attr_valid(UNUSED fr_dict_t *dict, fr_dict_attr_t const *parent,
+		       UNUSED char const *name, UNUSED int attr, fr_type_t type, fr_dict_attr_flags_t *flags)
+{
+	if ((parent->type == FR_TYPE_STRUCT) && (type == FR_TYPE_EXTENDED)) {
+		fr_strerror_printf("Attributes of type 'extended' cannot be used inside of a 'struct'");
+		return false;
+	}
+
+	/*
+	 *	"extra" signifies that subtype is being used by the
+	 *	dictionaries itself.
+	 */
+	if (flags->extra) return true;
+
+	if (parent->type == FR_TYPE_STRUCT) {
+		if (flags->subtype == FLAG_EXTENDED_ATTR) {
+			fr_strerror_printf("Attributes of type 'extended' cannot be used inside of a 'struct'");
+			return false;
+		}
+
+		if (flags->subtype != FLAG_ENCRYPT_NONE) {
+			fr_strerror_printf("Attributes inside of a 'struct' MUST NOT be encrypted.");
+			return false;
+		}
+
+		if (flags->has_tag) {
+			fr_strerror_printf("Tagged attributes cannot be used inside of a 'struct'");
+			return false;
+		}
+
+		return true;
+	}
+
+	/*
+	 *	No special flags, so we're OK.
+	 */
+	if (!flags->subtype) return true;
+
+	if (flags->has_tag && (flags->subtype != FLAG_ENCRYPT_TUNNEL_PASSWORD)) {
+		fr_strerror_printf("The 'has_tag' flag can only be used with 'encrypt=2'");
+		return false;
+	}
+
+	if ((flags->subtype == FLAG_EXTENDED_ATTR) && (type != FR_TYPE_EXTENDED)) {
+		fr_strerror_printf("The 'long' flag can only be used for attributes of type 'extended'");
+		return false;
+	}
+
+	/*
+	 *	Stupid hacks for MS-CHAP-MPPE-Keys.  The User-Password
+	 *	encryption method has no provisions for encoding the
+	 *	length of the data.  For User-Password, the data is
+	 *	(presumably) all printable non-zero data.  For
+	 *	MS-CHAP-MPPE-Keys, the data is binary crap.  So... we
+	 *	MUST specify a length in the dictionary.
+	 */
+	if ((flags->subtype == FLAG_ENCRYPT_USER_PASSWORD) && (type != FR_TYPE_STRING)) {
+		if (type != FR_TYPE_OCTETS) {
+			fr_strerror_printf("The 'encrypt=1' flag can only be used with "
+					   "attributes of type 'string'");
+			return false;
+		}
+
+		if (flags->length == 0) {
+			fr_strerror_printf("The 'encrypt=1' flag MUST be used with an explicit length for "
+					   "'octets' data types");
+			return false;
+		}
+	}
+
+	if (flags->subtype > FLAG_EXTENDED_ATTR) {
+		fr_strerror_printf("The 'encrypt' flag can only be 0..3");
+		return false;
+	}
+
+	switch (type) {
+	case FR_TYPE_EXTENDED:
+		if (flags->subtype == FLAG_EXTENDED_ATTR) break;
+		/* FALL-THROUGH */
+
+	default:
+	encrypt_fail:
+		fr_strerror_printf("The 'encrypt' flag cannot be used with attributes of type '%s'",
+				   fr_table_str_by_value(fr_value_box_type_table, type, "<UNKNOWN>"));
+		return false;
+
+	case FR_TYPE_TLV:
+	case FR_TYPE_IPV4_ADDR:
+	case FR_TYPE_UINT32:
+	case FR_TYPE_OCTETS:
+		if (flags->subtype == FLAG_ENCRYPT_ASCEND_SECRET) goto encrypt_fail;
+
+	case FR_TYPE_STRING:
+		break;
+	}
+
+	/*
+	 *	The Tunnel-Password encryption method can be used anywhere.
+	 *
+	 *	We forbid User-Password and Ascend-Send-Secret
+	 *	methods in the extended space.
+	 */
+	if ((flags->subtype != FLAG_ENCRYPT_TUNNEL_PASSWORD) && !flags->internal && !parent->flags.internal) {
+		fr_dict_attr_t const *v;
+
+		for (v = parent; v != NULL; v = v->parent) {
+			if (v->type == FR_TYPE_EXTENDED) {
+				fr_strerror_printf("The 'encrypt=%d' flag cannot be used with attributes "
+						   "of type '%s'", flags->subtype,
+						   fr_table_str_by_value(fr_value_box_type_table, type, "<UNKNOWN>"));
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+
+extern fr_dict_protocol_t libfreeradius_radius_dict_protocol;
+fr_dict_protocol_t libfreeradius_radius_dict_protocol = {
+	.name = "radius",
+	.default_type_size = 1,
+	.default_type_length = 1,
+	.subtype_table = subtype_table,
+	.subtype_table_len = NUM_ELEMENTS(subtype_table),
+	.attr_valid = attr_valid,
+};

@@ -24,6 +24,7 @@
  */
 RCSID("$Id$")
 
+#include <freeradius-devel/server/request_data.h>
 #include "unlang_priv.h"
 #include "return_priv.h"
 
@@ -122,24 +123,26 @@ static unlang_action_t unlang_foreach_next(REQUEST *request, rlm_rcode_t *presul
 static unlang_action_t unlang_foreach(REQUEST *request, rlm_rcode_t *presult)
 {
 	unlang_stack_t			*stack = request->stack;
-	unlang_stack_frame_t		*frame = &stack->frame[stack->depth];
-	unlang_t			*instruction = frame->instruction;
+	unlang_stack_frame_t		*frame;
+	unlang_t			*instruction;
 	unlang_frame_state_foreach_t	*foreach = NULL;
 	unlang_group_t			*g;
 	int				i, foreach_depth = 0;
 	VALUE_PAIR			*vps;
 
+	if (stack->depth >= UNLANG_STACK_MAX) {
+		ERROR("Internal sanity check failed: module stack is too deep");
+		fr_exit(EXIT_FAILURE);
+	}
+
+	frame = &stack->frame[stack->depth];
+	instruction = frame->instruction;
 	g = unlang_generic_to_group(instruction);
 
 	/*
 	 *	Ensure any breaks terminate here...
 	 */
 	break_point_set(frame);
-
-	if (stack->depth >= UNLANG_STACK_MAX) {
-		ERROR("Internal sanity check failed: module stack is too deep");
-		fr_exit(EXIT_FAILURE);
-	}
 
 	/*
 	 *	Figure out foreach depth by walking back up the stack

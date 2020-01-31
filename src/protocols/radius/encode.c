@@ -33,7 +33,7 @@ RCSID("$Id$")
 static unsigned int salt_offset = 0;
 
 static ssize_t encode_value(uint8_t *out, size_t outlen,
-			    fr_dict_attr_t const **tlv_stack, int depth,
+			    fr_dict_attr_t const **tlv_stack, unsigned int depth,
 			    fr_cursor_t *cursor, void *encoder_ctx);
 
 static ssize_t encode_rfc_hdr_internal(uint8_t *out, size_t outlen,
@@ -524,7 +524,7 @@ static ssize_t encode_tlv_hdr(uint8_t *out, size_t outlen,
  *	< 0, failure.
  */
 static ssize_t encode_value(uint8_t *out, size_t outlen,
-			    fr_dict_attr_t const **tlv_stack, int depth,
+			    fr_dict_attr_t const **tlv_stack, unsigned int depth,
 			    fr_cursor_t *cursor, void *encoder_ctx)
 {
 	size_t			offset;
@@ -540,6 +540,14 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	FR_PROTO_STACK_PRINT(tlv_stack, depth);
 
 	/*
+	 *	Catch errors early on.
+	 */
+	if (!vp->da->flags.extra && (vp->da->flags.subtype != FLAG_EXTENDED_ATTR) && !packet_ctx) {
+		fr_strerror_printf("Asked to encrypt attribute, but no packet context provided");
+		return -1;
+	}
+
+	/*
 	 *	It's a little weird to consider a TLV as a value,
 	 *	but it seems to work OK.
 	 */
@@ -553,7 +561,7 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	if (da->type == FR_TYPE_STRUCT) {
 		ssize_t struct_len;
 
-		struct_len = fr_struct_to_network(out, outlen, tlv_stack[depth], cursor);
+		struct_len = fr_struct_to_network(out, outlen, tlv_stack, depth, cursor, encoder_ctx, encode_value);
 		if (struct_len <= 0) return struct_len;
 
 		vp = fr_cursor_current(cursor);
@@ -623,7 +631,6 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	 */
 	case FR_TYPE_OCTETS:
 	case FR_TYPE_STRING:
-		if (da->flags.length && (len > da->flags.length)) len = da->flags.length;
 		data = vp->vp_ptr;
 		break;
 
@@ -716,17 +723,13 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	 */
 	if (len > (ssize_t)outlen) len = outlen;
 
-	if (vp->da->flags.encrypt && !packet_ctx) {
-		fr_strerror_printf("Asked to encrypt attribute, but no packet context provided");
-		return -1;
-	}
 	/*
 	 *	Encrypt the various password styles
 	 *
 	 *	Attributes with encrypted values MUST be less than
 	 *	128 bytes long.
 	 */
-	if (da->type != FR_TYPE_STRUCT) switch (vp->da->flags.encrypt) {
+	if (!da->flags.extra) switch (vp->da->flags.subtype) {
 	case FLAG_ENCRYPT_USER_PASSWORD:
 		encode_password(ptr, &len, data, len, packet_ctx->secret, packet_ctx->vector);
 		break;
@@ -762,6 +765,10 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 		len = RADIUS_AUTH_VECTOR_LENGTH;
 		break;
 
+		/*
+		 *	Not encrypted, OR an extended attribute, which
+		 *	cannot be encrypted.
+		 */
 	default:
 		if (vp->da->flags.has_tag && TAG_VALID(vp->tag)) {
 			if (vp->vp_type == FR_TYPE_STRING) {
@@ -774,7 +781,9 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 		}
 		memcpy(ptr, data, len);
 		break;
-	} /* switch over encryption flags */
+	} else {
+		memcpy(ptr, data, len);
+	}
 
 	FR_PROTO_HEX_DUMP(out, len, "value %s", fr_table_str_by_value(fr_value_box_type_table, vp->vp_type, "<UNKNOWN>"));
 
@@ -855,11 +864,14 @@ static int encode_extended_hdr(uint8_t *out, size_t outlen,
 	fr_type_t		vsa_type;
 	int			jump = 3;
 #endif
+	int			extra;
 	uint8_t			*start = out;
 	VALUE_PAIR const	*vp = fr_cursor_current(cursor);
 
 	VP_VERIFY(vp);
 	FR_PROTO_STACK_PRINT(tlv_stack, depth);
+
+	extra = (!tlv_stack[0]->flags.extra && (tlv_stack[0]->flags.subtype == FLAG_EXTENDED_ATTR));
 
 	/*
 	 *	@fixme: check depth of stack
@@ -868,7 +880,7 @@ static int encode_extended_hdr(uint8_t *out, size_t outlen,
 #ifndef NDEBUG
 	vsa_type = tlv_stack[1]->type;
 	if (fr_debug_lvl > 3) {
-		jump += tlv_stack[0]->flags.extra;
+		jump += extra;
 	}
 #endif
 
@@ -877,16 +889,16 @@ static int encode_extended_hdr(uint8_t *out, size_t outlen,
 	 */
 	switch (attr_type) {
 	case FR_TYPE_EXTENDED:
-		if (outlen < (size_t) (3 + tlv_stack[0]->flags.extra)) return 0;
+		if (outlen < (size_t) (3 + extra)) return 0;
 
 		/*
 		 *	Encode which extended attribute it is.
 		 */
 		out[0] = tlv_stack[depth++]->attr & 0xff;
-		out[1] = 3 + tlv_stack[0]->flags.extra;
+		out[1] = 3 + extra;
 		out[2] = tlv_stack[depth]->attr & 0xff;
 
-		if (tlv_stack[0]->flags.extra) out[3] = 0;	/* flags start off at zero */
+		if (extra) out[3] = 0;	/* flags start off at zero */
 		break;
 
 	default:
@@ -926,7 +938,7 @@ static int encode_extended_hdr(uint8_t *out, size_t outlen,
 	 *	"outlen" can be larger than 255 here, but only for the
 	 *	"long" extended type.
 	 */
-	if ((attr_type == FR_TYPE_EXTENDED) && !tlv_stack[0]->flags.extra && (outlen > 255)) outlen = 255;
+	if ((attr_type == FR_TYPE_EXTENDED) && !extra && (outlen > 255)) outlen = 255;
 
 	if (tlv_stack[depth]->type == FR_TYPE_TLV) {
 		len = encode_tlv_hdr_internal(out + out[1], outlen - out[1], tlv_stack, depth, cursor, encoder_ctx);
@@ -1543,8 +1555,8 @@ static int encode_test_ctx(void **out, TALLOC_CTX *ctx)
 /*
  *	Test points
  */
-extern fr_test_point_pair_encode_t radius_tp_encode;
-fr_test_point_pair_encode_t radius_tp_encode = {
+extern fr_test_point_pair_encode_t radius_tp_encode_pair;
+fr_test_point_pair_encode_t radius_tp_encode_pair = {
 	.test_ctx	= encode_test_ctx,
 	.func		= fr_radius_encode_pair
 };

@@ -46,8 +46,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_mschapv2_dict[];
 fr_dict_autoload_t rlm_eap_mschapv2_dict[] = {
@@ -134,11 +134,11 @@ static int auth_type_parse(UNUSED TALLOC_CTX *ctx, void *out, UNUSED void *paren
 {
 	char const	*auth_type = cf_pair_value(cf_item_to_pair(ci));
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, auth_type) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), auth_type) < 0) {
 		cf_log_err(ci, "Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type, -1);
+	*((fr_dict_enum_t **)out) = fr_dict_enum_by_name(attr_auth_type, auth_type, -1);
 
 	return 0;
 }
@@ -377,7 +377,7 @@ static rlm_rcode_t mschap_finalize(REQUEST *request, rlm_eap_mschapv2_t *inst,
 
 			VP_VERIFY(response);
 
-			RDEBUG2("MSCHAP-Error: %s", response->vp_strvalue);
+			RDEBUG2("MSCHAP-Error: %pV", &response->data);
 
 			/*
 			 *	Parse the new challenge out of the
@@ -428,7 +428,7 @@ static rlm_rcode_t mod_process_auth_type(void *instance, UNUSED void *thread, RE
 	rlm_eap_mschapv2_t	*inst = talloc_get_type_abort(instance, rlm_eap_mschapv2_t);
 	eap_session_t		*eap_session = eap_session_get(request->parent);
 
-	rcode = unlang_interpret_resume(request);
+	rcode = unlang_interpret(request);
 
 	if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_REJECT;
 
@@ -749,12 +749,12 @@ packet_ready:
 	/*
 	 *	This is a wild & crazy hack.
 	 */
-	unlang = cf_section_find(request->server_cs, "authenticate", inst->auth_type->alias);
+	unlang = cf_section_find(request->server_cs, "authenticate", inst->auth_type->name);
 	if (!unlang) {
 		rcode = process_authenticate(inst->auth_type->value->vb_uint32, request);
 	} else {
 		unlang_interpret_push_section(request, unlang, RLM_MODULE_FAIL, UNLANG_TOP_FRAME);
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		/*
 		 *	If it's yielding, set up the process function

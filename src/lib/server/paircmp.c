@@ -49,8 +49,8 @@ struct paircmp_s {
 	paircmp_t		*next;
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t paircmp_dict[];
 fr_dict_autoload_t paircmp_dict[] = {
@@ -137,7 +137,7 @@ static int prefix_suffix_cmp(UNUSED void *instance,
 
 	name = username->vp_strvalue;
 
-	RDEBUG3("Comparing name \"%s\" and check value \"%s\"", name, check->vp_strvalue);
+	RDEBUG3("Comparing name \"%s\" and check value \"%pV\"", name, &check->data);
 
 	len = strlen(check->vp_strvalue);
 
@@ -218,7 +218,7 @@ static int generic_cmp(UNUSED void *instance,
 
 		if (xlat_eval(value, sizeof(value), request, name, NULL, NULL) < 0) return 0;
 
-		vp = fr_pair_afrom_da(req, check->da);
+		MEM(vp = fr_pair_afrom_da(req, check->da));
 		vp->op = check->op;
 		fr_pair_value_from_str(vp, value, -1, '"', false);
 
@@ -754,7 +754,7 @@ int paircmp_register_by_name(char const *name, fr_dict_attr_t const *from,
 
 	memset(&flags, 0, sizeof(flags));
 
-	da = fr_dict_attr_by_name(fr_dict_internal, name);
+	da = fr_dict_attr_by_name(fr_dict_internal(), name);
 	if (da) {
 		if (paircmp_find(da)) {
 			fr_strerror_printf_push("Cannot register two comparions for attribute %s",
@@ -762,13 +762,13 @@ int paircmp_register_by_name(char const *name, fr_dict_attr_t const *from,
 			return -1;
 		}
 	} else if (from) {
-		if (fr_dict_attr_add(fr_dict_internal, fr_dict_root(fr_dict_internal),
+		if (fr_dict_attr_add(fr_dict_unconst(fr_dict_internal()), fr_dict_root(fr_dict_internal()),
 				     name, -1, from->type, &flags) < 0) {
 			fr_strerror_printf_push("Failed creating attribute '%s'", name);
 			return -1;
 		}
 
-		da = fr_dict_attr_by_name(fr_dict_internal, name);
+		da = fr_dict_attr_by_name(fr_dict_internal(), name);
 		if (!da) {
 			fr_strerror_printf("Failed finding attribute '%s'", name);
 			return -1;

@@ -23,7 +23,7 @@
  * @author Alan DeKok (aland@freeradius.org)
  *
  * @copyright 2012,2015 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
- * @copyright 2013,2015 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2013,2015 Network RADIUS SARL (legal@networkradius.com)
  * @copyright 2012 Alan DeKok (aland@freeradius.org)
  * @copyright 1999-2013 The FreeRADIUS Server Project.
  */
@@ -226,8 +226,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_ldap_dict[];
 fr_dict_autoload_t rlm_ldap_dict[] = {
@@ -371,7 +371,7 @@ free_values:
 free_result:
 	ldap_msgfree(result);
 free_socket:
-	mod_conn_release(inst, request, conn);
+	ldap_mod_conn_release(inst, request, conn);
 free_urldesc:
 	ldap_free_urldesc(ldap_url);
 
@@ -557,7 +557,7 @@ static rlm_rcode_t mod_map_proc(void *mod_inst, UNUSED void *proc_inst, REQUEST 
 free_result:
 	ldap_msgfree(result);
 free_socket:
-	mod_conn_release(inst, request, conn);
+	ldap_mod_conn_release(inst, request, conn);
 free_expanded:
 	talloc_free(expanded.ctx);
 free_urldesc:
@@ -639,7 +639,7 @@ static int rlm_ldap_groupcmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR
 	 */
 	user_dn = rlm_ldap_find_user(inst, request, &conn, NULL, false, NULL, &rcode);
 	if (!user_dn) {
-		mod_conn_release(inst, request, conn);
+		ldap_mod_conn_release(inst, request, conn);
 		return 1;
 	}
 
@@ -682,7 +682,7 @@ static int rlm_ldap_groupcmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR
 	rad_assert(conn);
 
 finish:
-	if (conn) mod_conn_release(inst, request, conn);
+	if (conn) ldap_mod_conn_release(inst, request, conn);
 
 	if (!found) {
 		RDEBUG2("User is not a member of \"%pV\"", &check->data);
@@ -791,7 +791,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 	 */
 	dn = rlm_ldap_find_user(inst, request, &conn, NULL, false, NULL, &rcode);
 	if (!dn) {
-		mod_conn_release(inst, request, conn);
+		ldap_mod_conn_release(inst, request, conn);
 
 		return rcode;
 	}
@@ -830,7 +830,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED void
 	};
 
 finish:
-	mod_conn_release(inst, request, conn);
+	ldap_mod_conn_release(inst, request, conn);
 
 	return rcode;
 }
@@ -1030,7 +1030,7 @@ static rlm_rcode_t mod_authorize(void *instance, UNUSED void *thread, REQUEST *r
 		fr_pair_value_bstrncpy(vp, password, pass_size);
 
 		if (RDEBUG_ENABLED3) {
-			RDEBUG3("Added eDirectory password.  control:%s += '%s'", vp->da->name, vp->vp_strvalue);
+			RDEBUG3("Added eDirectory password.  control:%pP", vp);
 		} else {
 			RDEBUG2("Added eDirectory password");
 		}
@@ -1142,7 +1142,7 @@ skip_edir:
 finish:
 	talloc_free(expanded.ctx);
 	if (result) ldap_msgfree(result);
-	mod_conn_release(inst, request, conn);
+	ldap_mod_conn_release(inst, request, conn);
 
 	return rcode;
 }
@@ -1372,7 +1372,7 @@ error:
 	 */
 	for (i = 0; i < last_exp; i++) talloc_free(expanded[i]);
 
-	mod_conn_release(inst, request, conn);
+	ldap_mod_conn_release(inst, request, conn);
 
 	return rcode;
 }
@@ -1501,7 +1501,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 		fr_dict_attr_flags_t	flags;
 
 		memset(&flags, 0, sizeof(flags));
-		if (fr_dict_attr_add(dict_freeradius, fr_dict_root(dict_freeradius),
+		if (fr_dict_attr_add(fr_dict_unconst(dict_freeradius), fr_dict_root(dict_freeradius),
 				     inst->cache_attribute, -1, FR_TYPE_STRING, &flags) < 0) {
 			PERROR("Error creating cache attribute");
 		error:
@@ -1582,13 +1582,13 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 #ifndef WITH_SASL
 	if (inst->user_sasl.mech) {
 		cf_log_err(conf, "Configuration item 'user.sasl.mech' not supported.  "
-			      "Linked libldap does not provide fr_ldap_sasl_bind( function");
+			   "Linked libldap does not provide ldap_sasl_bind( function");
 		goto error;
 	}
 
 	if (inst->handle_config.admin_sasl.mech) {
 		cf_log_err(conf, "Configuration item 'sasl.mech' not supported.  "
-			      "Linked libldap does not provide  fr_ldap_sasl_interactive_bind function");
+			   "Linked libldap does not provide ldap_sasl_interactive_bind function");
 		goto error;
 	}
 #endif
@@ -1596,7 +1596,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 #ifndef HAVE_LDAP_CREATE_SORT_CONTROL
 	if (inst->userobj_sort_by) {
 		cf_log_err(conf, "Configuration item 'sort_by' not supported.  "
-			      "Linked libldap does not provide ldap_create_sort_control function");
+			   "Linked libldap does not provide ldap_create_sort_control function");
 		goto error;
 	}
 #endif
@@ -1604,7 +1604,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 #ifndef HAVE_LDAP_URL_PARSE
 	if (inst->handle_config.use_referral_credentials) {
 		cf_log_err(conf, "Configuration item 'use_referral_credentials' not supported.  "
-			      "Linked libldap does not support URL parsing");
+			   "Linked libldap does not support URL parsing");
 		goto error;
 	}
 #endif
@@ -1976,7 +1976,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 *	Initialize the socket pool.
 	 */
 	inst->pool = module_connection_pool_init(inst->cs, &inst->handle_config,
-						 mod_conn_create, NULL, NULL, NULL, NULL);
+						 ldap_mod_conn_create, NULL, NULL, NULL, NULL);
 	if (!inst->pool) goto error;
 
 	fr_ldap_global_config(inst->ldap_debug, inst->tls_random_file);

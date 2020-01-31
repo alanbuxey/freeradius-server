@@ -29,17 +29,21 @@
  */
 RCSID("$Id$")
 
+#include <freeradius-devel/server/base.h>
+#include <freeradius-devel/server/dependency.h>
 #include <freeradius-devel/server/map_proc.h>
 #include <freeradius-devel/server/module.h>
 #include <freeradius-devel/server/rad_assert.h>
 #include <freeradius-devel/server/radmin.h>
 #include <freeradius-devel/server/state.h>
+#include <freeradius-devel/server/virtual_servers.h>
 
 #include <freeradius-devel/tls/base.h>
 
 #include <freeradius-devel/unlang/base.h>
 
 #include <freeradius-devel/util/misc.h>
+#include <freeradius-devel/util/syserror.h>
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -146,6 +150,41 @@ do { \
 	goto cleanup; \
 } while (0)
 
+static fr_event_timer_t const *fr_time_sync_ev = NULL;
+
+static void fr_time_sync_event(fr_event_list_t *el, UNUSED fr_time_t now, UNUSED void *uctx)
+{
+	fr_time_delta_t when = NSEC;
+
+	(void) fr_event_timer_in(el, el, &fr_time_sync_ev, when, fr_time_sync_event, NULL);
+	(void) fr_time_sync();
+}
+
+#ifndef NDEBUG
+/** Encourage the server to exit after a period of time
+ *
+ * @param[in] el	The main loop.
+ * @param[in] now	Current time.  Should be 0, when adding the event.
+ * @param[in] uctx	Pointer to a fr_time_delta_t indicating how long
+ *			the server should run before exit.
+ */
+static void fr_exit_after(fr_event_list_t *el, fr_time_t now, void *uctx)
+{
+	static fr_event_timer_t const *ev;
+
+	fr_time_delta_t	exit_after = *(fr_time_delta_t *)uctx;
+
+	if (now == 0) {
+		if (fr_event_timer_in(el, el, &ev, exit_after, fr_exit_after, uctx) < 0) {
+			PERROR("Failed inserting exit event");
+		}
+		return;
+	}
+
+	main_loop_signal_self(RADIUS_SIGNAL_SELF_TERM);
+}
+#endif
+
 /*
  *	The main guy.
  */
@@ -169,7 +208,12 @@ int main(int argc, char *argv[])
 	size_t		pool_size = 0;
 	void		*pool_page_start = NULL, *pool_page_end = NULL;
 	bool		do_mprotect;
+
 	dl_module_loader_t *dl_modules = NULL;
+
+#ifndef NDEBUG
+	fr_time_delta_t	exit_after = 0;
+#endif
 
 	/*
 	 *	Setup talloc callbacks so we get useful errors
@@ -266,6 +310,7 @@ int main(int argc, char *argv[])
 	 */
 	default_log.dst = L_DST_NULL;
 	default_log.fd = -1;
+	default_log.print_level = true;
 
 	/*
 	 *  Set the panic action and enable other debugging facilities
@@ -275,7 +320,7 @@ int main(int argc, char *argv[])
 	}
 
 	/*  Process the options.  */
-	while ((c = getopt(argc, argv, "Cd:D:fhi:l:L:Mn:p:PrstTvxX")) != -1) switch (c) {
+	while ((c = getopt(argc, argv, "Cd:D:e:fhi:l:L:Mn:p:PrstTvxX")) != -1) switch (c) {
 		case 'C':
 			check_config = true;
 			config->spawn_workers = false;
@@ -290,6 +335,12 @@ int main(int argc, char *argv[])
 		case 'D':
 			main_config_dict_dir_set(config, optarg);
 			break;
+
+#ifndef NDEBUG
+		case 'e':
+			exit_after = (fr_time_delta_t)atoi(optarg) * NSEC;
+			break;
+#endif
 
 		case 'f':
 			config->daemonize = false;
@@ -479,7 +530,7 @@ int main(int argc, char *argv[])
 	 *	Initialise the top level dictionary hashes which hold
 	 *	the protocols.
 	 */
-	if (fr_dict_global_init(global_ctx, config->dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(global_ctx, config->dict_dir)) {
 		fr_perror("%s", program);
 		EXIT_WITH_FAILURE;
 	}
@@ -566,8 +617,7 @@ int main(int argc, char *argv[])
 	 *	presence of the NOTIFY_SOCKET envrionmental variable to determine
 	 *	whether we're running under systemd.
 	 */
-	if (getenv("NOTIFY_SOCKET"))
-		INFO("Built without support for systemd watchdog, but running under systemd");
+	if (getenv("NOTIFY_SOCKET")) INFO("Built without support for systemd watchdog, but running under systemd");
 #endif
 
 	/*
@@ -707,9 +757,13 @@ int main(int argc, char *argv[])
 	 *	Start the network / worker threads.
 	 */
 	{
-		int networks = config->num_networks;
-		int workers = config->num_workers;
 		fr_event_list_t *el = NULL;
+		fr_schedule_config_t *schedule;
+
+		schedule = talloc_zero(global_ctx, fr_schedule_config_t);
+		schedule->max_workers = config->max_networks;
+		schedule->max_networks = config->max_workers;
+		schedule->stats_interval = config->stats_interval;
 
 		/*
 		 *	Single server mode: use the global event list.
@@ -717,15 +771,11 @@ int main(int argc, char *argv[])
 		 *	it's own event list.
 		 */
 		if (!config->spawn_workers) {
-			networks = 0;
-			workers = 0;
 			el = main_loop_event_list();
 		}
 
 		sc = fr_schedule_create(NULL, el, &default_log, fr_debug_lvl,
-					networks, workers,
-					thread_instantiate,
-					config->root_cs);
+					thread_instantiate, schedule);
 		if (!sc) {
 			PERROR("Failed starting the scheduler: %s", fr_strerror());
 			EXIT_WITH_FAILURE;
@@ -836,6 +886,12 @@ int main(int argc, char *argv[])
 	fr_strerror();
 
 	/*
+	 *	Prevent anything from modifying the dictionaries
+	 *	they're now immutable.
+	 */
+	fr_dict_global_read_only();
+
+	/*
 	 *  Protect global memory - If something attempts
 	 *  to write to this memory we get a SIGBUS.
 	 */
@@ -847,15 +903,25 @@ int main(int argc, char *argv[])
 		DEBUG("Global memory protected");
 	}
 
+	fr_time_sync_event(main_loop_event_list(), fr_time(), NULL);
+#ifndef NDEBUG
+	if (exit_after > 0) fr_exit_after(main_loop_event_list(), 0, &exit_after);
+#endif
 	/*
 	 *  Process requests until HUP or exit.
 	 */
+	INFO("Ready to process requests");	/* we were actually ready a while ago, but oh well */
 	while ((status = main_loop_start()) == 0x80) {
 #ifdef WITH_STATS
 		radius_stats_init(1);
 #endif
 		main_config_hup(config);
 	}
+
+	/*
+	 *  Ignore the TERM signal: we're about to die.
+	 */
+	signal(SIGTERM, SIG_IGN);
 
 	/*
 	 *  Unprotect global memory
@@ -880,11 +946,6 @@ int main(int argc, char *argv[])
 	fr_radmin_stop();
 
 	/*
-	 *  Ignore the TERM signal: we're about to die.
-	 */
-	signal(SIGTERM, SIG_IGN);
-
-	/*
 	 *   Fire signal and stop triggers after ignoring SIGTERM, so handlers are
 	 *   not killed with the rest of the process group, below.
 	 */
@@ -892,21 +953,17 @@ int main(int argc, char *argv[])
 	trigger_exec(NULL, NULL, "server.stop", false, NULL);
 
 	/*
-	 *  Send a TERM signal to all associated processes
-	 *  (including us, which gets ignored.)
+	 *  Stop the scheduler, this signals the network and worker threads
+	 *  to exit gracefully.  fr_schedule_destroy only returns once all
+	 *  threads have been joined.
 	 */
-	if (config->spawn_workers) kill(-radius_pid, SIGTERM);
+	(void) fr_schedule_destroy(sc);
 
 	/*
 	 *  We're exiting, so we can delete the PID file.
 	 *  (If it doesn't exist, we can ignore the error returned by unlink)
 	 */
 	if (config->daemonize) unlink(config->pid_file);
-
-	/*
-	 *  Stop the scheduler
-	 */
-	(void) fr_schedule_destroy(sc);
 
 	/*
 	 *  Free memory in an explicit and consistent order
@@ -918,12 +975,25 @@ int main(int argc, char *argv[])
 	 */
 	main_loop_free();		/* Free the requests */
 
+	/*
+	 *  Send a TERM signal to all associated processes
+	 *  (including us, which gets ignored.)
+	 *
+	 *  This _shouldn't_ be needed, but may help with
+	 *  processes created by the exec code or triggers.
+	 */
+	if (config->spawn_workers) {
+		INFO("All threads have exited, sending SIGTERM to remaining children");
+		kill(-radius_pid, SIGTERM);
+	}
 cleanup:
 	/*
 	 *  Frees request specific logging resources which is OK
 	 *  because all the requests will have been stopped.
 	 */
 	log_global_free();
+
+	fr_snmp_free();
 
 	server_free();
 
@@ -995,6 +1065,9 @@ static void NEVER_RETURNS usage(main_config_t const *config, int status)
 	fprintf(output, "  -C            Check configuration and exit.\n");
 	fprintf(stderr, "  -d <raddb>    Set configuration directory (defaults to " RADDBDIR ").\n");
 	fprintf(stderr, "  -D <dictdir>  Set main dictionary directory (defaults to " DICTDIR ").\n");
+#ifndef NDEBUG
+	fprintf(output, "  -e <seconds>  Exit after the specified number of seconds.  Useful for diagnosing \"crash-on-exit\" issues.\n");
+#endif
 	fprintf(output, "  -f            Run as a foreground process, not a daemon.\n");
 	fprintf(output, "  -h            Print this help message.\n");
 	fprintf(output, "  -l <log_file> Logging output will be written to this file.\n");

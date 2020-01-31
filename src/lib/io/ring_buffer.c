@@ -32,7 +32,7 @@ RCSID("$Id$")
 /*
  *	Ring buffers are allocated in a block.
  */
-struct fr_ring_buffer_t {
+struct fr_ring_buffer_s {
 	uint8_t		*buffer;	//!< actual start of the ring buffer
 	size_t		size;		//!< Size of this ring buffer
 
@@ -199,7 +199,9 @@ uint8_t *fr_ring_buffer_alloc(fr_ring_buffer_t *rb, size_t size)
 	(void) talloc_get_type_abort(rb, fr_ring_buffer_t);
 
 	if (rb->closed) {
+#ifndef NDEBUG
 		fr_strerror_printf("Allocation request after ring buffer is closed");
+#endif
 		return NULL;
 	}
 
@@ -226,7 +228,9 @@ uint8_t *fr_ring_buffer_alloc(fr_ring_buffer_t *rb, size_t size)
 			return p;
 		}
 
+#ifndef NDEBUG
 		fr_strerror_printf("No memory available in ring buffer");
+#endif
 		return NULL;
 	}
 
@@ -274,7 +278,9 @@ uint8_t *fr_ring_buffer_alloc(fr_ring_buffer_t *rb, size_t size)
 	 *
 	 *	|....S****WE....|
 	 */
+#ifndef NDEBUG
 	fr_strerror_printf("No memory available in ring buffer");
+#endif
 	return NULL;
 }
 

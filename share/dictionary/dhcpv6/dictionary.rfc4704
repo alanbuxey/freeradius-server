@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2019 The FreeRADIUS Server project and contributors
+# Copyright (C) 2020 The FreeRADIUS Server project and contributors
 # This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
 # Version $Id$
 ##############################################################################
@@ -11,4 +11,9 @@
 #
 ##############################################################################
 
-ATTRIBUTE	Client-FQDN				39	octets		# Complex struct see RFC 4704
+ATTRIBUTE	Client-FQDN				39	struct
+MEMBER		Client-FQDN-Flag-Reserved		bit[5]
+MEMBER		Client-FQDN-Flag-No-Server-Update	bit[1]
+MEMBER		Client-FQDN-Flag-Server-Override	bit[1]
+MEMBER		Client-FQDN-Flag-Server-Update		bit[1]
+MEMBER		Client-FQDN-Domain-Name			string		partial_dns_label

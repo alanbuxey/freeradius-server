@@ -49,11 +49,11 @@ struct fr_cmd_argv_s {
 	fr_cmd_argv_t		*child;
 };
 
-struct fr_cmd_t {
+struct fr_cmd_s {
 	char const		*name;
 
-	struct fr_cmd_t		*next;
-	struct fr_cmd_t		*child;				//!< if there are subcommands
+	struct fr_cmd_s		*next;
+	struct fr_cmd_s		*child;				//!< if there are subcommands
 
 	char const		*syntax;			//!< only for terminal nodes
 	char const		*help;				//!< @todo - long / short help
@@ -440,7 +440,7 @@ static int split(char **input, char **output, bool syntax_string)
 				if (!*str) {
 					fr_strerror_printf("Invalid backslash at end of string.");
 					return -1;
-				};
+				}
 				str++;
 				continue;
 			}
@@ -2717,6 +2717,16 @@ int fr_command_complete(fr_cmd_t *head, char const *text, int start,
 		}
 
 		/*
+		 *	We've run off of the end of the input, and
+		 *	found a partially matching command.  Return
+		 *	all of the commands which match this
+		 *	expansion.
+		 */
+		if (!*p && *q) {
+			goto expand;
+		}
+
+		/*
 		 *	The only matching exit condition is *p is a
 		 *	space, and *q is the NUL character.
 		 */
@@ -2731,6 +2741,7 @@ int fr_command_complete(fr_cmd_t *head, char const *text, int start,
 			rad_assert(cmd->child != NULL);
 			word = p;
 			cmd = cmd->child;
+
 			info->argv[info->argc] = cmd->name;
 			info->argc++;
 			continue;
@@ -2834,10 +2845,17 @@ int fr_command_print_help(FILE *fp, fr_cmd_t *head, char const *text)
 		 *	Done the input, but not the commands.
 		 */
 		if (!*p) {
+			/*
+			 *	If we've ALSO matched this complete
+			 *	command, AND it has children, then
+			 *	print help about the children.
+			 */
+			if (!*q && cmd->intermediate) goto intermediate;
 			break;
 		}
 
 		if (cmd->intermediate) {
+		intermediate:
 			rad_assert(cmd->child != NULL);
 			word = p;
 			cmd = cmd->child;

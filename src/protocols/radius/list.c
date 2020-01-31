@@ -132,7 +132,7 @@ typedef struct {
  *	Structure defining a list of packets (incoming or outgoing)
  *	that should be managed.
  */
-struct fr_packet_list_t {
+struct fr_packet_list_s {
 	rbtree_t	*tree;
 
 	int		alloc_id;
@@ -509,6 +509,8 @@ bool fr_packet_list_id_alloc(fr_packet_list_t *pl, int proto,
 	 */
 
 	id = fd = -1;
+	if (request->id >= 0 && request->id < 256)
+		id = request->id;
 	start_i = fr_rand() & SOCKOFFSET_MASK;
 
 #define ID_i ((i + start_i) & SOCKOFFSET_MASK)
@@ -589,6 +591,18 @@ bool fr_packet_list_id_alloc(fr_packet_list_t *pl, int proto,
 		/*
 		 *	Otherwise, this socket is OK to use.
 		 */
+
+		/*
+		 *	An explicit ID was requested
+		 */
+
+		if (id != -1) {
+			if  ((ps->id[(id >> 3) & 0x1f] & (1 << (id & 0x07))) != 0) continue;
+
+			ps->id[(id >> 3) & 0x1f] |= (1 << (id & 0x07));
+			fd = i;
+			break;
+		}
 
 		/*
 		 *	Look for a free Id, starting from a random number.
@@ -857,4 +871,16 @@ void fr_packet_header_log(fr_log_t const *log, RADIUS_PACKET *packet, bool recei
 #endif
 		        packet->data_len);
 	}
+}
+
+/*
+ *	Debug the packet header and all attributes
+ */
+void fr_packet_log(fr_log_t const *log, RADIUS_PACKET *packet, bool received)
+{
+	fr_packet_header_log(log, packet, received);
+	if (fr_debug_lvl >= L_DBG_LVL_1) fr_pair_list_log(log, packet->vps);
+#ifndef NDEBUG
+	if (fr_debug_lvl >= L_DBG_LVL_4) fr_radius_packet_log_hex(log, packet);
+#endif
 }

@@ -29,6 +29,7 @@ extern "C" {
 #include <freeradius-devel/build.h>
 #include <freeradius-devel/missing.h>
 #include <freeradius-devel/util/table.h>
+#include <freeradius-devel/util/fopencookie.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -53,6 +54,7 @@ typedef enum {
 	L_INFO = 3,				//!< Informational message.
 	L_ERR = 4,				//!< Error message.
 	L_WARN = 5,				//!< Warning.
+	L_AUTH = 6,				//!< Authentication logs
 	L_DBG = 16,				//!< Only displayed when debugging is enabled.
 	L_DBG_INFO = 17,			//!< Info only displayed when debugging is enabled.
 	L_DBG_WARN = 18,			//!< Warning only displayed when debugging is enabled.
@@ -98,17 +100,16 @@ typedef struct {
 
 	bool			dates_utc;	//!< Whether timestamps should be UTC or local timezone.
 
+	bool			print_level;	//!< sometimes we don't want log levels printed
+
 	fr_log_timestamp_t	timestamp;	//!< Prefix log messages with timestamps.
 
 	int			fd;		//!< File descriptor to write messages to.
 	char const		*file;		//!< Path to log file.
 
 	void			*cookie;	//!< for fopencookie()
-#ifdef HAVE_FOPENCOOKIE
+
 	ssize_t			(*cookie_write)(void *, char const *, size_t);	//!< write function
-#else
-	int			(*cookie_write)(void *, char const *, int);	//!< write function
-#endif
 } fr_log_t;
 
 extern fr_log_t default_log;

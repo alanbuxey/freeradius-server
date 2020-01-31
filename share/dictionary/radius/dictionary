@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2019 The FreeRADIUS Server project and contributors
+# Copyright (C) 2020 The FreeRADIUS Server project and contributors
 # This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
 # Version $Id$
 #
@@ -60,7 +60,7 @@
 #	7		= 1	(integer encoding)
 #
 
-PROTOCOL	RADIUS		1
+PROTOCOL	RADIUS		1	verify=lib
 BEGIN-PROTOCOL	RADIUS
 
 #
@@ -240,6 +240,7 @@ $INCLUDE dictionary.mimosa
 $INCLUDE dictionary.motorola
 $INCLUDE dictionary.motorola.wimax
 $INCLUDE dictionary.navini
+$INCLUDE dictionary.net
 $INCLUDE dictionary.netscreen
 $INCLUDE dictionary.networkphysics
 $INCLUDE dictionary.nexans
@@ -260,12 +261,14 @@ $INCLUDE dictionary.paloalto
 $INCLUDE dictionary.patton
 $INCLUDE dictionary.perle
 $INCLUDE dictionary.pfsense
+$INCLUDE dictionary.pica8
 $INCLUDE dictionary.propel
 $INCLUDE dictionary.prosoft
 $INCLUDE dictionary.proxim
 $INCLUDE dictionary.purewave
 $INCLUDE dictionary.quiconnect
 $INCLUDE dictionary.quintum
+$INCLUDE dictionary.rcntec
 $INCLUDE dictionary.redcreek
 $INCLUDE dictionary.riverbed
 $INCLUDE dictionary.riverstone

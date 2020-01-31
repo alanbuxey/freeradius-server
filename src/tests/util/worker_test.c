@@ -65,7 +65,7 @@ static bool		quiet = false;
 static fr_schedule_worker_t workers[MAX_WORKERS];
 
 /**********************************************************************/
-typedef struct rad_request REQUEST;
+typedef struct fr_request_s REQUEST;
 
 REQUEST *request_alloc(UNUSED TALLOC_CTX *ctx)
 {
@@ -76,13 +76,13 @@ void request_verify(UNUSED char const *file, UNUSED int line, UNUSED REQUEST con
 {
 }
 
-void talloc_const_free(void const *ptr)
+int talloc_const_free(void const *ptr)
 {
 	void *tmp;
-	if (!ptr) return;
+	if (!ptr) return 0;
 
 	memcpy(&tmp, &ptr, sizeof(tmp));
-	talloc_free(tmp);
+	return talloc_free(tmp);
 }
 /**********************************************************************/
 
@@ -338,7 +338,7 @@ check_close:
 					fr_worker_debug(workers[i].worker, stdout);
 				}
 
-				rcode = fr_channel_signal_worker_close(workers[i].ch);
+				rcode = fr_channel_signal_responder_close(workers[i].ch);
 				MPRINT1("Master asked exit for worker %d.\n", workers[i].id);
 				if (rcode < 0) {
 					fprintf(stderr, "Failed signaling close %d: %s\n", i, fr_syserror(errno));
@@ -390,7 +390,7 @@ check_close:
 			MPRINT1("Master got channel event %d\n", ce);
 
 			switch (ce) {
-			case FR_CHANNEL_DATA_READY_NETWORK:
+			case FR_CHANNEL_DATA_READY_REQUESTOR:
 				MPRINT1("Master got data ready signal\n");
 
 				reply = fr_channel_recv_reply(ch);
@@ -415,12 +415,6 @@ check_close:
 				MPRINT1("Master received close signal for worker %d\n", sw->id);
 				rad_assert(signaled_close == true);
 
-
-				/*
-				 *	Tell the event loop to exit, and signal the worker
-				 *	so that it stops waiting on the KQ.
-				 */
-				(void) fr_worker_exit(sw->worker);
 				(void) pthread_kill(sw->pthread_id, SIGTERM);
 				running = false;
 				break;

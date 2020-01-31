@@ -23,7 +23,7 @@
  *
  * @copyright 2012-2016 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  */
-RCSIDH(other_h, "$Id$")
+RCSIDH(rest_h, "$Id$")
 
 #include <freeradius-devel/server/pairmove.h>
 #include <freeradius-devel/server/pool.h>
@@ -146,6 +146,7 @@ typedef struct {
 	char const		*tls_private_key_file;
 	char const		*tls_private_key_password;
 	char const		*tls_ca_file;
+	char const		*tls_ca_issuer_file;
 	char const		*tls_ca_path;
 	char const		*tls_random_file;
 	bool			tls_check_cert;
@@ -296,7 +297,7 @@ typedef struct {
 	rlm_rest_handle_t	*handle;	//!< curl easy handle servicing our request.
 } rlm_rest_xlat_rctx_t;
 
-extern fr_dict_t *dict_freeradius;
+extern fr_dict_t const *dict_freeradius;
 
 extern fr_dict_attr_t const *attr_rest_http_body;
 extern fr_dict_attr_t const *attr_rest_http_header;
@@ -310,7 +311,7 @@ typedef size_t (*rest_read_t)(void *ptr, size_t size, size_t nmemb,
 			      void *userdata);
 
 
-void *mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);
+void *rest_mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);
 
 /*
  *	Request processing API
@@ -351,7 +352,7 @@ ssize_t rest_uri_host_unescape(char **out, UNUSED rlm_rest_t const *mod_inst, RE
  *	Async IO helpers
  */
 void rest_io_module_action(void *instance, void *thread, REQUEST *request, void *rctx, fr_state_signal_t action);
-void rest_io_xlat_action(REQUEST *request, void *xlat_inst, void *xlat_thread_inst, void *rctx, fr_state_signal_t action);
+void rest_io_xlat_signal(REQUEST *request, void *xlat_inst, void *xlat_thread_inst, void *rctx, fr_state_signal_t action);
 int rest_io_request_enqueue(rlm_rest_thread_t *thread, REQUEST *request, void *handle);
 int rest_io_init(rlm_rest_thread_t *thread, bool multiplex);
 

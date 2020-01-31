@@ -44,7 +44,7 @@ RCSID("$Id$")
 
 #define MAX_WORKERS 64
 
-fr_thread_local_setup(fr_ring_buffer_t *, fr_network_rb)	/* macro */
+fr_thread_local_setup(fr_ring_buffer_t *, fr_network_rb); /* macro */
 
 typedef struct {
 	fr_listen_t	*listen;
@@ -98,15 +98,11 @@ typedef struct {
  *	https://www.eecs.harvard.edu/~michaelm/postscripts/mythesis.pdf
  *	https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf
  */
-struct fr_network_t {
-	int			kq;			//!< our KQ
-
+struct fr_network_s {
 	fr_log_t const		*log;			//!< log destination
 	fr_log_lvl_t		lvl;			//!< debug log level
 
 	fr_atomic_queue_t	*aq_control;		//!< atomic queue for control messages sent to me
-
-	uintptr_t		aq_ident;		//!< identifier for control-plane events
 
 	fr_control_t		*control;		//!< the control plane
 
@@ -218,7 +214,7 @@ static void fr_network_recv_reply(void *ctx, fr_channel_t *ch, fr_channel_data_t
 	/*
 	 *	Update stats for the worker.
 	 */
-	worker = fr_channel_network_ctx_get(ch);
+	worker = fr_channel_requestor_uctx_get(ch);
 	worker->stats.out++;
 	worker->cpu_time = cd->reply.cpu_time;
 	if (!worker->predicted) {
@@ -257,15 +253,13 @@ static void fr_network_channel_callback(void *ctx, void const *data, size_t data
 		DEBUG3("noop <--");
 		break;
 
-	case FR_CHANNEL_DATA_READY_NETWORK:
+	case FR_CHANNEL_DATA_READY_REQUESTOR:
 		rad_assert(ch != NULL);
 		DEBUG3("data <--");
-		while (fr_channel_recv_reply(ch)) {
-			/* nothing */
-		}
+		while (fr_channel_recv_reply(ch));
 		break;
 
-	case FR_CHANNEL_DATA_READY_WORKER:
+	case FR_CHANNEL_DATA_READY_RESPONDER:
 		rad_assert(0 == 1);
 		DEBUG3("worker ??? <--");
 		break;
@@ -287,7 +281,7 @@ static void fr_network_channel_callback(void *ctx, void const *data, size_t data
  * @param nr the network
  * @param cd the message we've received
  */
-static bool fr_network_send_request(fr_network_t *nr, fr_channel_data_t *cd)
+static int fr_network_send_request(fr_network_t *nr, fr_channel_data_t *cd)
 {
 	fr_network_worker_t *worker;
 
@@ -327,7 +321,7 @@ static bool fr_network_send_request(fr_network_t *nr, fr_channel_data_t *cd)
 	 */
 	if (fr_channel_send_request(worker->channel, cd) < 0) {
 		worker->stats.dropped++;
-		return false;
+		return -1;
 	}
 
 	worker->stats.in++;
@@ -340,7 +334,7 @@ static bool fr_network_send_request(fr_network_t *nr, fr_channel_data_t *cd)
 	 */
 	worker->cpu_time += worker->predicted;
 
-	return true;
+	return 0;
 }
 
 
@@ -388,9 +382,9 @@ static void fr_network_read(UNUSED fr_event_list_t *el, int sockfd, UNUSED int f
 	fr_network_t *nr = s->nr;
 	ssize_t data_size;
 	fr_channel_data_t *cd, *next;
-	fr_time_t *recv_time;
 
-	if (!fr_cond_assert(s->listen->fd == sockfd)) return;
+	if (!fr_cond_assert_msg(s->listen->fd == sockfd, "Expected listen->fd (%u) to be equal event fd (%u)",
+				s->listen->fd, sockfd)) return;
 
 	DEBUG3("network read");
 
@@ -432,7 +426,7 @@ next_message:
 	 *	network side knows that it needs to close the
 	 *	connection.
 	 */
-	data_size = s->listen->app_io->read(s->listen, &cd->packet_ctx, &recv_time,
+	data_size = s->listen->app_io->read(s->listen, &cd->packet_ctx, &cd->request.recv_time,
 					    cd->m.data, cd->m.rb_size, &s->leftover, &cd->priority, &cd->request.is_dup);
 	if (data_size == 0) {
 		/*
@@ -469,11 +463,15 @@ next_message:
 	 *
 	 *	We always use "now" as the time of the message, as the
 	 *	packet MAY be a duplicate packet magically resurrected
-	 *	from the past.
+	 *	from the past.  i.e. If the read routines are doing
+	 *	dedup, then they notice that the packet is a
+	 *	duplicate.  In that case, they send over a copy of the
+	 *	packet, BUT with the original timestamp.  This
+	 *	information tells the worker that the packet is a
+	 *	duplicate.
 	 */
 	cd->m.when = fr_time();
 	cd->listen = s->listen;
-	cd->request.recv_time = recv_time;
 
 	/*
 	 *	Nothing in the buffer yet.  Allocate room for one
@@ -492,14 +490,14 @@ next_message:
 		next = (fr_channel_data_t *) fr_message_alloc_reserve(s->ms, &cd->m, data_size, s->leftover,
 								      s->listen->default_message_size);
 		if (!next) {
-			ERROR("Failed reserving partial packet.");
+			PERROR("Failed reserving partial packet.");
 			// @todo - probably close the socket...
 			rad_assert(0 == 1);
 		}
 	}
 
-	if (!fr_network_send_request(nr, cd)) {
-		ERROR("Failed sending packet to worker");
+	if (fr_network_send_request(nr, cd) < 0) {
+		PERROR("Failed sending packet to worker");
 		fr_message_done(&cd->m);
 		nr->stats.dropped++;
 		s->stats.dropped++;
@@ -676,7 +674,7 @@ static void fr_network_write(UNUSED fr_event_list_t *el, UNUSED int sockfd, UNUS
 			       NULL,
 			       fr_network_error,
 			       s) < 0) {
-		PERROR("Failed adding new socket to event loop");
+		PERROR("Failed removing \"read\" callback from event loop");
 		fr_network_socket_dead(nr, s);
 	}
 }
@@ -686,19 +684,13 @@ static int _network_socket_free(fr_network_socket_t *s)
 	fr_network_t *nr = s->nr;
 	fr_channel_data_t *cd;
 
-	if (!s->dead) {
-		if (fr_event_fd_delete(nr->el, s->listen->fd, s->filter) < 0) {
-			PERROR("Failed deleting socket from event loop in _network_socket_free");
-			return -1;
-		}
-	}
-
 	rbtree_deletebydata(nr->sockets, s);
 	rbtree_deletebydata(nr->sockets_by_num, s);
 
 	if (s->listen->app_io->close) {
 		s->listen->app_io->close(s->listen);
 	} else {
+		fr_event_fd_delete(nr->el, s->listen->fd, FR_EVENT_FILTER_IO);
 		close(s->listen->fd);
 	}
 
@@ -758,7 +750,8 @@ static void fr_network_listen_callback(void *ctx, void const *data, size_t data_
 	if (num_messages < 8) num_messages = 8;
 
 	size = s->listen->default_message_size * num_messages;
-	if (!size) size = (1 << 17);
+	if (size < (1 << 17)) size = (1 << 17);
+	if (size > (100 * 1024 * 1024)) size = (100 * 1024 * 1024);
 
 	/*
 	 *	Allocate the ring buffer for messages and packets.
@@ -848,7 +841,7 @@ static void fr_network_directory_callback(void *ctx, void const *data, size_t da
 				   &funcs,
 				   app_io->error ? fr_network_error : NULL,
 				   s) < 0) {
-		PERROR("Failed adding new socket to event loop");
+		PERROR("Failed adding directory monitor event loop");
 		talloc_free(s);
 		return;
 	}
@@ -885,7 +878,7 @@ static void fr_network_worker_callback(void *ctx, void const *data, size_t data_
 	w->channel = fr_worker_channel_create(worker, w, nr->control);
 	if (!w->channel) fr_exit_now(1);
 
-	fr_channel_network_ctx_add(w->channel, w);
+	fr_channel_requestor_uctx_add(w->channel, w);
 	fr_channel_set_recv_reply(w->channel, nr, fr_network_recv_reply);
 
 	/*
@@ -940,27 +933,6 @@ static void fr_network_inject_callback(void *ctx, void const *data, size_t data_
 }
 
 
-/** Service a control-plane event.
- *
- * @param[in] kq the kq to service
- * @param[in] kev the kevent to service
- * @param[in] ctx the fr_worker_t
- */
-static void fr_network_evfilt_user(UNUSED int kq, UNUSED struct kevent const *kev, void *ctx)
-{
-	fr_time_t now;
-	fr_network_t *nr = talloc_get_type_abort(ctx, fr_network_t);
-	uint8_t data[256];
-
-	now = fr_time();
-
-	/*
-	 *	Service all available control-plane events
-	 */
-	fr_control_service(nr->control, data, sizeof(data), now);
-}
-
-
 /** Create a network
  *
  * @param[in] ctx the talloc ctx
@@ -987,27 +959,16 @@ fr_network_t *fr_network_create(TALLOC_CTX *ctx, fr_event_list_t *el, fr_log_t c
 	nr->max_workers = MAX_WORKERS;
 	nr->num_workers = 0;
 
-	nr->kq = fr_event_list_kq(nr->el);
-	rad_assert(nr->kq >= 0);
-
 	nr->aq_control = fr_atomic_queue_create(nr, 1024);
 	if (!nr->aq_control) {
 		talloc_free(nr);
 		return NULL;
 	}
 
-	nr->aq_ident = fr_event_user_insert(nr->el, fr_network_evfilt_user, nr);
-	if (!nr->aq_ident) {
-		fr_strerror_printf_push("Failed updating event list");
-		talloc_free(nr);
-		return NULL;
-	}
-
-	nr->control = fr_control_create(nr, nr->kq, nr->aq_control, nr->aq_ident);
+	nr->control = fr_control_create(nr, el, nr->aq_control);
 	if (!nr->control) {
 		fr_strerror_printf_push("Failed creating control queue");
 	fail:
-		(void) fr_event_user_delete(nr->el, fr_network_evfilt_user, nr);
 		talloc_free(nr);
 		return NULL;
 	}
@@ -1022,7 +983,7 @@ fr_network_t *fr_network_create(TALLOC_CTX *ctx, fr_event_list_t *el, fr_log_t c
 	if (!nr->rb) {
 		fr_strerror_printf_push("Failed creating ring buffer");
 	fail2:
-		fr_control_free(nr->control);
+		talloc_free(nr->control);
 		goto fail;
 	}
 
@@ -1107,7 +1068,7 @@ int fr_network_destroy(fr_network_t *nr)
 	for (i = 0; i < nr->num_workers; i++) {
 		fr_network_worker_t *worker = nr->workers[i];
 
-		fr_channel_signal_worker_close(worker->channel);
+		fr_channel_signal_responder_close(worker->channel);
 	}
 
 	/*
@@ -1340,7 +1301,7 @@ void fr_network(fr_network_t *nr)
 		 *	Check the event list.  If there's an error
 		 *	(e.g. exit), we stop looping and clean up.
 		 */
-		num_events = fr_event_corral(nr->el, wait_for_event);
+		num_events = fr_event_corral(nr->el, fr_time(), wait_for_event);
 		DEBUG3("Got num_events %d", num_events);
 		if (num_events < 0) break;
 
@@ -1501,6 +1462,20 @@ int fr_network_stats(fr_network_t const *nr, int num, uint64_t *stats)
 	if (num <= 5) return num;
 
 	return 5;
+}
+
+void fr_network_stats_log(fr_network_t const *nr, fr_log_t const *log)
+{
+	int i;
+
+	/*
+	 *	Dump all of the channel statistics.
+	 */
+	for (i = 0; i < nr->max_workers; i++) {
+		if (!nr->workers[i]) continue;
+
+		fr_channel_stats_log(nr->workers[i]->channel, log, __FILE__, __LINE__);
+	}
 }
 
 static int cmd_stats_self(FILE *fp, UNUSED FILE *fp_err, void *ctx, UNUSED fr_cmd_info_t const *info)

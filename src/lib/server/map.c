@@ -877,11 +877,7 @@ static int map_exec_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, v
 	{
 		VALUE_PAIR *vp;
 
-		vp = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-		if (!vp) {
-			REDEBUG("Out of memory");
-			return -1;
-		}
+		MEM(vp = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 		vp->op = map->op;
 		vp->tag = map->lhs->tmpl_tag;
 		if (fr_pair_value_from_str(vp, answer, -1, '"', false) < 0) {
@@ -1606,9 +1602,7 @@ static inline VALUE_PAIR *map_list_mod_to_vp(TALLOC_CTX *ctx, vp_tmpl_t const *a
 {
 	VALUE_PAIR *vp;
 
-	vp = fr_pair_afrom_da(ctx, attr->tmpl_da);
-	if (!vp) return NULL;
-
+	MEM(vp = fr_pair_afrom_da(ctx, attr->tmpl_da));
 	vp->tag = attr->tmpl_tag;
 
 	if (fr_value_box_copy(vp, &vp->data, value) < 0) {
@@ -1780,9 +1774,16 @@ int map_list_mod_apply(REQUEST *request, vp_list_mod_t const *vlm)
 		rad_assert(((mod->op == T_OP_CMP_FALSE) && tmpl_is_null(mod->rhs)) ||
 			   tmpl_is_data(mod->rhs));
 
-		for (vb = &mod->rhs->tmpl_value;
-		     vb;
-		     vb = vb->next) map_list_mod_debug(request, map, mod, vb->type != FR_TYPE_INVALID ? vb : NULL);
+		/*
+		 *	map_list_mod_debug()
+		 */
+		if (RDEBUG_ENABLED2) {
+			for (vb = &mod->rhs->tmpl_value;
+			     vb;
+			     vb = vb->next) {
+				map_list_mod_debug(request, map, mod, vb->type != FR_TYPE_INVALID ? vb : NULL);
+			}
+		}
 	}
 	mod = vlm->mod;	/* Reset */
 
@@ -2149,8 +2150,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 		rad_assert(map->lhs->tmpl_da);	/* We need to know which attribute to create */
 		rad_assert(map->rhs->tmpl_xlat != NULL);
 
-		n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-		if (!n) return -1;
+		MEM(n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 
 		/*
 		 *	We do the debug printing because xlat_aeval_compiled
@@ -2186,8 +2186,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 		rad_assert(tmpl_is_attr(map->lhs));
 		rad_assert(map->lhs->tmpl_da);	/* We need to know which attribute to create */
 
-		n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-		if (!n) return -1;
+		MEM(n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 
 		str = NULL;
 		slen = xlat_aeval(request, &str, request, map->rhs->name, NULL, NULL);
@@ -2212,8 +2211,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 		rad_assert(tmpl_is_attr(map->lhs));
 		rad_assert(map->lhs->tmpl_da);	/* We need to know which attribute to create */
 
-		n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-		if (!n) return -1;
+		MEM(n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 
 		if (fr_pair_value_from_str(n, map->rhs->name, -1, '\0', false) < 0) {
 			rcode = 0;
@@ -2249,8 +2247,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 
 			(void) fr_cursor_init(&to, out);
 			for (; vp; vp = fr_cursor_current(&from)) {
-				n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-				if (!n) return -1;
+				MEM(n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 
 				if (fr_value_box_cast(n, &n->data,
 						      map->lhs->tmpl_da->type, map->lhs->tmpl_da, &vp->data) < 0) {
@@ -2289,8 +2286,7 @@ int map_to_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, vp_map_t cons
 		rad_assert(map->lhs->tmpl_da);
 		rad_assert(tmpl_is_attr(map->lhs));
 
-		n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da);
-		if (!n) return -1;
+		MEM(n = fr_pair_afrom_da(ctx, map->lhs->tmpl_da));
 
 		if (map->lhs->tmpl_da->type == map->rhs->tmpl_value_type) {
 			if (fr_value_box_copy(n, &n->data, &map->rhs->tmpl_value) < 0) {
@@ -2895,6 +2891,8 @@ void map_debug_log(REQUEST *request, vp_map_t const *map, VALUE_PAIR const *vp)
 		vpt.tmpl_da = vp->da;
 		vpt.tmpl_num = NUM_ANY;
 		vpt.type = TMPL_TYPE_ATTR;
+
+		if (vp->da->flags.is_unknown) memcpy(&vpt.tmpl_unknown, &vp->da, sizeof(vpt.tmpl_unknown));
 
 		/*
 		 *	Not appropriate to use map->rhs->quote here, as that's the quoting

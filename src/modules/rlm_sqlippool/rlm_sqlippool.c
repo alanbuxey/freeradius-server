@@ -169,8 +169,8 @@ static CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_sqlippool_dict[];
 fr_dict_autoload_t rlm_sqlippool_dict[] = {
@@ -446,7 +446,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 
 	inst->sql_inst = (rlm_sql_t *) sql_inst->dl_inst->data;
 
-	if (strcmp(inst->sql_inst->driver->name, "sql") != 0) {
+	if (strcmp(cf_section_name1(inst->sql_inst->cs), "sql") != 0) {
 		cf_log_err(conf, "Module \"%s\" is not an instance of the rlm_sql module",
 			      inst->sql_instance_name);
 		return -1;

@@ -17,7 +17,7 @@
  *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
- * @copyright 2012 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2012 Network RADIUS SARL (legal@networkradius.com)
  */
 
 #include <freeradius-devel/server/base.h>
@@ -233,7 +233,7 @@ typedef struct {
 	rbtree_t	*session_tree;
 } bfd_socket_t;
 
-static fr_dict_t *dict_bfd;
+static fr_dict_t const *dict_bfd;
 
 extern fr_dict_autoload_t proto_bfd_dict[];
 fr_dict_autoload_t proto_bfd_dict[] = {
@@ -1379,7 +1379,7 @@ static int bfd_process(bfd_state_t *session, bfd_packet_t *bfd)
 		request->module = NULL;
 
 		DEBUG2("server %s {", cf_section_name2(request->server_cs));
-		unlang_interpret(request, session->unlang, RLM_MODULE_NOTFOUND);
+		unlang_interpret_section(request, session->unlang, RLM_MODULE_NOTFOUND);
 		DEBUG("}");
 
 		/*
@@ -1837,7 +1837,7 @@ static int bfd_socket_compile(CONF_SECTION *server_cs, UNUSED CONF_SECTION *list
 
 	cf_log_debug(cs, "Loading bfd {...}");
 
-	if (unlang_compile(cs, MOD_AUTHORIZE, NULL) < 0) {
+	if (unlang_compile(cs, MOD_AUTHORIZE, NULL, NULL) < 0) {
 		cf_log_err(cs, "Failed compiling 'bfd' section");
 		return -1;
 	}

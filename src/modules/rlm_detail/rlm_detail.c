@@ -80,8 +80,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_detail_dict[];
 fr_dict_autoload_t rlm_detail_dict[] = {
@@ -278,7 +278,7 @@ static int detail_write(FILE *out, rlm_detail_t const *inst, REQUEST *request, R
 		 */
 		if (is_radius_code(packet->code)) {
 			WRITE("\tPacket-Type = %s\n",
-			      fr_dict_enum_alias_by_value(attr_packet_type, fr_box_uint32(packet->code)));
+			      fr_dict_enum_name_by_value(attr_packet_type, fr_box_uint32(packet->code)));
 		} else {
 			WRITE("\tPacket-Type = %u\n", packet->code);
 		}

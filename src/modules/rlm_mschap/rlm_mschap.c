@@ -123,8 +123,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_mschap_dict[];
 fr_dict_autoload_t rlm_mschap_dict[] = {
@@ -649,7 +649,7 @@ static int _mod_conn_free(struct wbcContext **wb_ctx)
 /*
  *	Create connection pool winbind context
  */
-static void *mod_conn_create(TALLOC_CTX *ctx, UNUSED void *instance, UNUSED fr_time_delta_t timeout)
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance, UNUSED fr_time_delta_t timeout)
 {
 	struct wbcContext **wb_ctx;
 	rlm_mschap_t const	*inst = instance;
@@ -2188,11 +2188,11 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	if (!name) name = cf_section_name1(conf);
 	inst->name = name;
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, inst->name) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), inst->name) < 0) {
 		PERROR("Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name, -1);
+	inst->auth_type = fr_dict_enum_by_name(attr_auth_type, inst->name, -1);
 	rad_assert(inst->auth_type);
 
 	xlat_register(inst, inst->name, mschap_xlat, NULL, NULL, 0, XLAT_DEFAULT_BUF_LEN, true);

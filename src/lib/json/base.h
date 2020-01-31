@@ -23,7 +23,7 @@
  * @author Arran Cudbard-Bell
  *
  * @copyright 2015 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
- * @copyright 2015 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2015 Network RADIUS SARL (legal@networkradius.com)
  * @copyright 2015 The FreeRADIUS Server Project
  */
 RCSIDH(json_h, "$Id$")
@@ -68,5 +68,5 @@ size_t    	fr_json_from_pair(char *out, size_t outlen, VALUE_PAIR const *vp);
 
 void		fr_json_version_print(void);
 
-const char	*fr_json_afrom_pair_list(TALLOC_CTX *ctx, VALUE_PAIR **vps, const char *prefix);
+char		*fr_json_afrom_pair_list(TALLOC_CTX *ctx, VALUE_PAIR **vps, const char *prefix);
 #endif

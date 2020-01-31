@@ -44,7 +44,7 @@ typedef struct {
 	fr_redis_cluster_t	*cluster;
 } rlm_cache_redis_t;
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t rlm_cache_redis_dict[];
 fr_dict_autoload_t rlm_cache_redis_dict[] = {
@@ -302,7 +302,7 @@ static cache_status_t cache_entry_insert(UNUSED rlm_cache_config_t const *config
 	 */
 	tmpl_init(&created_value, TMPL_TYPE_DATA, "<TEMP>", 6, T_BARE_WORD);
 	created_value.tmpl_value_type = FR_TYPE_DATE;
-	created_value.tmpl_value.vb_date = fr_time_from_timeval(&(struct timeval) {.tv_sec = c->created});
+	created_value.tmpl_value.vb_date = c->created;
 
 	/*
 	 *	Encode the entry expiry time
@@ -312,7 +312,7 @@ static cache_status_t cache_entry_insert(UNUSED rlm_cache_config_t const *config
 	 */
 	tmpl_init(&expires_value, TMPL_TYPE_DATA, "<TEMP>", 6, T_BARE_WORD);
 	expires_value.tmpl_value_type = FR_TYPE_DATE;
-	expires_value.tmpl_value.vb_date = fr_time_from_timeval(&(struct timeval) {.tv_sec = c->expires});
+	expires_value.tmpl_value.vb_date = c->expires;
 	expires.next = c->maps;	/* Head of the list */
 
 	for (cnt = 0, map = &created; map; cnt++, map = map->next);
@@ -387,10 +387,12 @@ static cache_status_t cache_entry_insert(UNUSED rlm_cache_config_t const *config
 		 *	Set the expiry time and close out the transaction.
 		 */
 		if (c->expires > 0) {
-			RDEBUG3("EXPIREAT \"%pV\" %li",
-				fr_box_strvalue_len((char const *)c->key, c->key_len), (long)c->expires);
-			if (redisAppendCommand(conn->handle, "EXPIREAT %b %i", c->key,
-					       c->key_len, c->expires) != REDIS_OK) goto append_error;
+			RDEBUG3("EXPIREAT \"%pV\" %" PRIu64,
+				fr_box_strvalue_len((char const *)c->key, c->key_len),
+				fr_unix_time_to_sec(c->expires));
+			if (redisAppendCommand(conn->handle, "EXPIREAT %b %" PRIu64, c->key,
+					       c->key_len,
+					       fr_unix_time_to_sec(c->expires)) != REDIS_OK) goto append_error;
 			pipelined++;
 			RDEBUG3("EXEC");
 			if (redisAppendCommand(conn->handle, "EXEC") != REDIS_OK) goto append_error;

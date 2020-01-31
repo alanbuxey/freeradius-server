@@ -128,6 +128,8 @@ static CONF_PARSER const module_config[] = {
 
 	{ FR_CONF_OFFSET("no_connection_fail", FR_TYPE_BOOL, rlm_radius_t, no_connection_fail) },
 
+	{ FR_CONF_OFFSET("originate", FR_TYPE_BOOL, rlm_radius_t, originate) },
+
 	{ FR_CONF_POINTER("status_checks", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) status_checks_config },
 
 	{ FR_CONF_OFFSET("max_connections", FR_TYPE_UINT32, rlm_radius_t, max_connections), .dflt = STRINGIFY(32) },
@@ -148,7 +150,7 @@ static CONF_PARSER const type_interval_config[FR_RADIUS_MAX_PACKET_CODE] = {
 	[FR_CODE_DISCONNECT_REQUEST] = { FR_CONF_POINTER("Disconnect-Request", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) disconnect_config },
 };
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_radius_dict[];
 fr_dict_autoload_t rlm_radius_dict[] = {
@@ -198,7 +200,7 @@ static int type_parse(UNUSED TALLOC_CTX *ctx, void *out, UNUSED void *parent,
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
+	type_enum = fr_dict_enum_by_name(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 	invalid_code:
 		cf_log_err(ci, "Unknown or invalid RADIUS packet type '%s'", type_str);
@@ -287,7 +289,7 @@ static int status_check_type_parse(UNUSED TALLOC_CTX *ctx, void *out, UNUSED voi
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
+	type_enum = fr_dict_enum_by_name(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 	invalid_code:
 		cf_log_err(ci, "Unknown or invalid RADIUS packet type '%s'", type_str);
@@ -853,4 +855,8 @@ module_t rlm_radius = {
 		[MOD_AUTHORIZE]		= mod_process,
 		[MOD_AUTHENTICATE]     	= mod_process,
 	},
+        .method_names = (module_method_names_t[]){
+                { CF_IDENT_ANY,       CF_IDENT_ANY,   mod_process },
+                MODULE_NAME_TERMINATOR
+        },
 };

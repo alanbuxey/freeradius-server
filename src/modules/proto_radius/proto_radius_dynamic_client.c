@@ -23,15 +23,16 @@
  * @copyright 2016 Alan DeKok (aland@deployingradius.com)
  */
 #include <freeradius-devel/io/application.h>
-#include <freeradius-devel/server/protocol.h>
+#include <freeradius-devel/io/base.h>
+#include <freeradius-devel/radius/radius.h>
 #include <freeradius-devel/server/module.h>
+#include <freeradius-devel/server/protocol.h>
+#include <freeradius-devel/server/rad_assert.h>
 #include <freeradius-devel/unlang/base.h>
 #include <freeradius-devel/util/dict.h>
-#include <freeradius-devel/io/base.h>
-#include <freeradius-devel/server/rad_assert.h>
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t proto_radius_dynamic_client_dict[];
 fr_dict_autoload_t proto_radius_dynamic_client_dict[] = {
@@ -57,7 +58,7 @@ fr_dict_attr_autoload_t proto_radius_dynamic_client_dict_attr[] = {
 	{ NULL }
 };
 
-static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
+static rlm_rcode_t mod_process(UNUSED void *instance, UNUSED void *thread, REQUEST *request)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
@@ -82,7 +83,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -118,7 +119,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 

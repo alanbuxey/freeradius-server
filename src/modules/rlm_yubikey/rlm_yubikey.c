@@ -21,7 +21,7 @@
  *
  * @author Arran Cudbard-Bell (a.cudbardb@networkradius.com)
  * @copyright 2013 The FreeRADIUS server project
- * @copyright 2013 Network RADIUS (info@networkradius.com)
+ * @copyright 2013 Network RADIUS (legal@networkradius.com)
  */
 RCSID("$Id$")
 
@@ -46,8 +46,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_yubikey_dict[];
 fr_dict_autoload_t rlm_yubikey_dict[] = {
@@ -165,11 +165,11 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	}
 #endif
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, inst->name) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), inst->name) < 0) {
 		PERROR("Failed adding %s alias", inst->name);
 		return -1;
 	}
-	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name, -1);
+	inst->auth_type = fr_dict_enum_by_name(attr_auth_type, inst->name, -1);
 
 	if (!cf_section_name2(conf)) return 0;
 
@@ -316,11 +316,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, UNUSED void *t
 
 		RINDENT();
 		if (RDEBUG_ENABLED3) {
-			RDEBUG3("&request:Yubikey-OTP := '%s'", vp->vp_strvalue);
-			RDEBUG3("&request:User-Password := '%s'", password->vp_strvalue);
+			RDEBUG3("&request:%pP", vp);
+			RDEBUG3("&request:%pP", password);
 		} else {
-			RDEBUG2("&request:Yubikey-OTP := <<< secret >>>");
-			RDEBUG2("&request:User-Password := <<< secret >>>");
+			RDEBUG2("&request:%s := <<< secret >>>", vp->da->name);
+			RDEBUG2("&request:%s := <<< secret >>>", password->da->name);
 		}
 		REXDENT();
 

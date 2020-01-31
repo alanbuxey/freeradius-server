@@ -17,7 +17,7 @@
  *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
- * @copyright 2013 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2013 Network RADIUS SARL (legal@networkradius.com)
  */
 
 #include <freeradius-devel/server/base.h>
@@ -49,7 +49,7 @@ typedef struct {
 	uint8_t		tpa[4];			//!< Target protocol address.
 } arp_over_ether_t;
 
-static fr_dict_t *dict_arp;
+static fr_dict_t const *dict_arp;
 
 extern fr_dict_autoload_t proto_arp_dict[];
 fr_dict_autoload_t proto_arp_dict[] = {
@@ -72,7 +72,7 @@ static rlm_rcode_t arp_process(REQUEST *request)
 
 	request->component = "arp";
 
-	return unlang_interpret(request, unlang, RLM_MODULE_NOOP);
+	return unlang_interpret_section(request, unlang, RLM_MODULE_NOOP);
 }
 
 
@@ -309,7 +309,7 @@ static int arp_socket_compile(CONF_SECTION *server_cs, UNUSED CONF_SECTION *list
 
 	cf_log_debug(cs, "Loading arp {...}");
 
-	if (unlang_compile(cs, MOD_POST_AUTH, NULL) < 0) {
+	if (unlang_compile(cs, MOD_POST_AUTH, NULL, NULL) < 0) {
 		cf_log_err(cs, "Failed compiling 'arp' section");
 		return -1;
 	}

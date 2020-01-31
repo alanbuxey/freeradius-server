@@ -488,7 +488,7 @@ vp_tmpl_t *tmpl_alloc(TALLOC_CTX *ctx, tmpl_type_t type, char const *name, ssize
 
 	return vpt;
 }
-/* @} **/
+/** @} */
 
 /** @name Create new #vp_tmpl_t from a string
  *
@@ -835,13 +835,13 @@ ssize_t tmpl_afrom_attr_substr(TALLOC_CTX *ctx, attr_ref_error_t *err,
 	 *	Attribute location checks
 	 */
 	{
-		fr_dict_t *found_in = fr_dict_by_da(vpt->tmpl_da);
+		fr_dict_t const *found_in = fr_dict_by_da(vpt->tmpl_da);
 
 		/*
 		 *	Even if allow_foreign is false, if disallow_internal is not
 		 *	true, we still allow foreign
 		 */
-		if (found_in == fr_dict_internal) {
+		if (found_in == fr_dict_internal()) {
 			if (rules->disallow_internal) {
 				fr_strerror_printf("Internal attributes not allowed here");
 				if (err) *err = ATTR_REF_ERROR_INTERNAL_ATTRIBUTE_NOT_ALLOWED;
@@ -1263,7 +1263,7 @@ ssize_t tmpl_afrom_str(TALLOC_CTX *ctx, vp_tmpl_t **out,
 
 	return slen;
 }
-/* @} **/
+/** @} */
 
 /** @name Cast or convert #vp_tmpl_t
  *
@@ -1396,9 +1396,7 @@ int tmpl_cast_to_vp(VALUE_PAIR **out, REQUEST *request,
 
 	*out = NULL;
 
-	vp = fr_pair_afrom_da(request, cast);
-	if (!vp) return -1;
-
+	MEM(vp = fr_pair_afrom_da(request, cast));
 	if (tmpl_is_data(vpt)) {
 		VP_VERIFY(vp);
 		rad_assert(vp->vp_type == vpt->tmpl_value_type);
@@ -1450,7 +1448,7 @@ int tmpl_define_unknown_attr(vp_tmpl_t *vpt)
 
 	if (!vpt->tmpl_da->flags.is_unknown) return 1;
 
-	da = fr_dict_unknown_add(fr_dict_internal, vpt->tmpl_da);
+	da = fr_dict_unknown_add(fr_dict_unconst(fr_dict_internal()), vpt->tmpl_da);
 	if (!da) return -1;
 	vpt->tmpl_da = da;
 
@@ -1489,7 +1487,7 @@ int tmpl_define_undefined_attr(fr_dict_t *dict_def, vp_tmpl_t *vpt,
 
 	if (!tmpl_is_attr_undefined(vpt)) return 1;
 
-	if (fr_dict_attr_add(dict_def, fr_dict_root(fr_dict_internal), vpt->tmpl_unknown_name, -1, type, flags) < 0) {
+	if (fr_dict_attr_add(dict_def, fr_dict_root(fr_dict_internal()), vpt->tmpl_unknown_name, -1, type, flags) < 0) {
 		return -1;
 	}
 	da = fr_dict_attr_by_name(dict_def, vpt->tmpl_unknown_name);
@@ -1519,7 +1517,7 @@ int tmpl_define_undefined_attr(fr_dict_t *dict_def, vp_tmpl_t *vpt,
 
 	return 0;
 }
-/* @} **/
+/** @} */
 
 /** @name Resolve a #vp_tmpl_t outputting the result in various formats
  *
@@ -2581,11 +2579,7 @@ int tmpl_find_or_add_vp(VALUE_PAIR **out, REQUEST *request, vp_tmpl_t const *vpt
 
 		RADIUS_LIST_AND_CTX(ctx, head, request, vpt->tmpl_request, vpt->tmpl_list);
 
-		vp = fr_pair_afrom_da(ctx, vpt->tmpl_da);
-		if (!vp) {
-			REDEBUG("Failed allocating attribute %s", vpt->tmpl_da->name);
-			return -1;
-		}
+		MEM(vp = fr_pair_afrom_da(ctx, vpt->tmpl_da));
 		*out = vp;
 	}
 		return 0;
@@ -2594,7 +2588,7 @@ int tmpl_find_or_add_vp(VALUE_PAIR **out, REQUEST *request, vp_tmpl_t const *vpt
 		return err;
 	}
 }
-/* @} **/
+/** @} */
 
 #ifdef WITH_VERIFY_PTR
 /** Used to check whether areas of a vp_tmpl_t are zeroed out
@@ -2970,7 +2964,7 @@ ssize_t tmpl_preparse(char const **out, size_t *outlen, char const *start,
 			return_P("Forbidden data type in cast");
 		}
 
-		*castda = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_CAST_BASE + cast);
+		*castda = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal()), FR_CAST_BASE + cast);
 		if (!*castda) {
 			return_P("Cannot cast to this data type");
 		}

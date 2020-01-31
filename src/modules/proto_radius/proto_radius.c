@@ -89,7 +89,7 @@ static CONF_PARSER const proto_radius_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t proto_radius_dict[];
 fr_dict_autoload_t proto_radius_dict[] = {
@@ -147,7 +147,7 @@ static int type_parse(TALLOC_CTX *ctx, void *out, UNUSED void *parent, CONF_ITEM
 	 *	Allow the process module to be specified by
 	 *	packet type.
 	 */
-	type_enum = fr_dict_enum_by_alias(attr_packet_type, type_str, -1);
+	type_enum = fr_dict_enum_by_name(attr_packet_type, type_str, -1);
 	if (!type_enum) {
 		size_t i;
 
@@ -183,9 +183,9 @@ static int type_parse(TALLOC_CTX *ctx, void *out, UNUSED void *parent, CONF_ITEM
 	 *	Setting 'type = foo' means you MUST have at least a
 	 *	'recv foo' section.
 	 */
-	if (!cf_section_find(server, "recv", type_enum->alias)) {
+	if (!cf_section_find(server, "recv", type_enum->name)) {
 		cf_log_err(ci, "Failed finding 'recv %s {...} section of virtual server %s",
-			   type_enum->alias, cf_section_name2(server));
+			   type_enum->name, cf_section_name2(server));
 		return -1;
 	}
 
@@ -210,14 +210,14 @@ static int type_parse(TALLOC_CTX *ctx, void *out, UNUSED void *parent, CONF_ITEM
 		inst->code_allowed[FR_CODE_DISCONNECT_REQUEST] = true;
 	}
 
-	process_app_cs = cf_section_find(listen_cs, type_enum->alias, NULL);
+	process_app_cs = cf_section_find(listen_cs, type_enum->name, NULL);
 
 	/*
 	 *	Allocate an empty section if one doesn't exist
 	 *	this is so defaults get parsed.
 	 */
 	if (!process_app_cs) {
-		MEM(process_app_cs = cf_section_alloc(listen_cs, listen_cs, type_enum->alias, NULL));
+		MEM(process_app_cs = cf_section_alloc(listen_cs, listen_cs, type_enum->name, NULL));
 	}
 
 	/*
@@ -348,7 +348,7 @@ static int mod_decode(void const *instance, REQUEST *request, uint8_t *const dat
 		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp != NULL;
 		     vp = fr_cursor_next(&cursor)) {
-			if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) {
+			if (vp->da->flags.subtype != FLAG_ENCRYPT_NONE) {
 				switch (vp->da->type) {
 				default:
 					break;
@@ -732,6 +732,7 @@ fr_app_t proto_radius = {
 	.name			= "radius",
 	.config			= proto_radius_config,
 	.inst_size		= sizeof(proto_radius_t),
+	.dict			= &dict_radius,
 
 	.onload			= mod_load,
 	.unload			= mod_unload,

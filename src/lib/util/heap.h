@@ -34,13 +34,15 @@ extern "C" {
 #include <sys/types.h>
 #include <talloc.h>
 
+typedef int32_t fr_heap_iter_t;
+
 /*
  *  Return negative numbers to put 'a' at the top of the heap.
  *  Return positive numbers to put 'b' at the top of the heap.
  */
 typedef int8_t (*fr_heap_cmp_t)(void const *a, void const *b);
 
-typedef struct fr_heap_t fr_heap_t;
+typedef struct fr_heap_s fr_heap_t;
 
 /** Creates a heap that can be used with non-talloced elements
  *
@@ -74,6 +76,9 @@ void		*fr_heap_peek(fr_heap_t *hp);
 void		*fr_heap_peek_tail(fr_heap_t *hp);
 
 uint32_t	fr_heap_num_elements(fr_heap_t *hp);
+
+void		*fr_heap_iter_init(fr_heap_t *hp, fr_heap_iter_t *iter);
+void		*fr_heap_iter_next(fr_heap_t *hp, fr_heap_iter_t *iter);
 
 #ifdef __cplusplus
 }

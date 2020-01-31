@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2019 The FreeRADIUS Server project and contributors
+# Copyright (C) 2020 The FreeRADIUS Server project and contributors
 # This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
 # Version $Id$
 ##############################################################################
@@ -11,4 +11,19 @@
 #
 ##############################################################################
 
-ATTRIBUTE	MPL-Parameters				104	octets		# Complex struct see RFC 7774
+ATTRIBUTE	MPL-Parameters				104	struct
+MEMBER		MPL-Proactive-Forwarding		uint8
+MEMBER		MPL-Proactive-Tunit			uint8
+MEMBER		MPL-Proactive-SE-Lifetime		uint16
+MEMBER		MPL-Proactive-DM-K			uint8
+MEMBER		MPL-Proactive-DM-IMin			uint16
+MEMBER		MPL-Proactive-DM-IMax			uint8
+MEMBER		MPL-Proactive-DM-T-Exp			uint16
+MEMBER		MPL-Proactive-C-K			uint8
+MEMBER		MPL-Proactive-C-IMin			uint16
+MEMBER		MPL-Proactive-C-IMax			uint8
+MEMBER		MPL-Proactive-C-T-Exp			uint16
+MEMBER		MPL-Proactive-Domain-Address		ipv6addr	# optional, and can be omitted
+
+VALUE	MPL-Proactive-Forwarding	True			0x80
+VALUE	MPL-Proactive-Forwarding	False			0x00

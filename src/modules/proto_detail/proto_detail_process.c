@@ -33,7 +33,7 @@
 
 #include "proto_detail.h"
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t proto_detail_process_dict[];
 fr_dict_autoload_t proto_detail_process_dict[] = {
@@ -47,7 +47,7 @@ fr_dict_attr_autoload_t proto_detail_process_dict_attr[] = {
 	{ NULL }
 };
 
-static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
+static rlm_rcode_t mod_process(void *instance, UNUSED void *thread, REQUEST *request)
 {
 	VALUE_PAIR			*vp;
 	rlm_rcode_t			rcode;
@@ -59,7 +59,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 	switch (request->request_state) {
 	case REQUEST_INIT:
 		RDEBUG("Received %s ID %i",
-		       fr_dict_enum_alias_by_value(inst->attr_packet_type, fr_box_uint32(request->packet->code)),
+		       fr_dict_enum_name_by_value(inst->attr_packet_type, fr_box_uint32(request->packet->code)),
 		       request->packet->id);
 		log_request_pair_list(L_DBG_LVL_1, request, request->packet->vps, "");
 
@@ -78,7 +78,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -150,7 +150,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -180,7 +180,7 @@ static rlm_rcode_t mod_process(void const *instance, REQUEST *request)
 			REDEBUG("Failed ID %i", request->reply->id);
 		} else {
 			RDEBUG("Sent %s ID %i",
-			       fr_dict_enum_alias_by_value(inst->attr_packet_type, fr_box_uint32(request->reply->code)),
+			       fr_dict_enum_name_by_value(inst->attr_packet_type, fr_box_uint32(request->reply->code)),
 			       request->reply->id);
 		}
 
@@ -210,6 +210,11 @@ static int mod_instantiate(void *instance, CONF_SECTION *listen_cs)
 	CONF_SECTION		*server_cs;
 	vp_tmpl_rules_t		parse_rules;
 
+	/*
+	 *	The detail file reader gets its dictionary from the
+	 *	configuration, and not from a static protocol.  So we
+	 *	have to set it manually.
+	 */
 	memset(&parse_rules, 0, sizeof(parse_rules));
 	parse_rules.dict_def = inst->dict;
 
@@ -218,7 +223,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *listen_cs)
 	server_cs = cf_item_to_section(cf_parent(listen_cs));
 	rad_assert(strcmp(cf_section_name1(server_cs), "server") == 0);
 
-	return virtual_server_compile_sections(server_cs, compile_list, &parse_rules);
+	return virtual_server_compile_sections(server_cs, compile_list, &parse_rules, inst);
 }
 
 

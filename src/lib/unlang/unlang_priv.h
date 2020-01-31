@@ -37,8 +37,6 @@
 extern "C" {
 #endif
 
-#define UNLANG_STACK_MAX (64)
-
 /* Actions may be a positive integer (the highest one returned in the group
  * will be returned), or the keyword "return", represented here by
  * MOD_ACTION_RETURN, to cause an immediate return.
@@ -293,6 +291,9 @@ extern unlang_op_t unlang_ops[];
 
 extern char const *const comp2str[];
 
+extern fr_table_num_sorted_t const mod_rcode_table[];
+extern size_t mod_rcode_table_len;
+
 /** @name Conversion functions for converting #unlang_t to its specialisations
  *
  * Simple conversions: #unlang_module_t and #unlang_group_t are subclasses of #unlang_t,
@@ -322,7 +323,7 @@ static inline unlang_t *unlang_xlat_inline_to_generic(unlang_xlat_inline_t *p)
 {
 	return (unlang_t *)p;
 }
-/* @} **/
+/** @} */
 
 /** @name Internal interpreter functions needed by ops
  *
@@ -330,12 +331,11 @@ static inline unlang_t *unlang_xlat_inline_to_generic(unlang_xlat_inline_t *p)
  */
 void		unlang_interpret_push(REQUEST *request, unlang_t *instruction,
 				      rlm_rcode_t default_rcode, bool do_next_sibling, bool top_frame);
-rlm_rcode_t	unlang_interpret_run(REQUEST *request);
 
 int		unlang_op_init(void);
 
 void		unlang_op_free(void);
-/* @} **/
+/** @} */
 
 /** @name io shims
  *
@@ -344,11 +344,11 @@ void		unlang_op_free(void);
  *
  * @{
  */
-rlm_rcode_t	unlang_io_process_interpret(UNUSED void const *instance, REQUEST *request);
+rlm_rcode_t	unlang_io_process_interpret(UNUSED void *instance, UNUSED void *thread, REQUEST *request);
 
 REQUEST		*unlang_io_subrequest_alloc(REQUEST *parent, fr_dict_t const *namespace, bool detachable);
 
-/* @} **/
+/** @} */
 
 /** @name op init functions
  *
@@ -383,7 +383,7 @@ int		unlang_subrequest_op_init(void);
 void		unlang_subrequest_op_free(void);
 
 void		unlang_switch_init(void);
- /* @} **/
+ /** @} */
 
 #ifdef __cplusplus
 }

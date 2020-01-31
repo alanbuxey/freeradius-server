@@ -75,14 +75,12 @@ typedef struct {
 	uint32_t offered_addr;
 } dc_offer_t;
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
-static fr_dict_t *dict_dhcpv4;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_dhcpv4;
 
 extern fr_dict_autoload_t dhcpclient_dict[];
 fr_dict_autoload_t dhcpclient_dict[] = {
 	{ .out = &dict_freeradius, .proto = "freeradius" },
-	{ .out = &dict_radius, .proto = "radius" },
 	{ .out = &dict_dhcpv4, .proto = "dhcpv4" },
 	{ NULL }
 };
@@ -106,7 +104,7 @@ fr_dict_attr_autoload_t dhcpclient_dict_attr[] = {
 	{ .out = &attr_packet_src_ip_address, .name = "Packet-Src-IP-Address", .type = FR_TYPE_IPV4_ADDR, .dict = &dict_freeradius },
 	{ .out = &attr_packet_src_ipv6_address, .name = "Packet-Src-IPv6-Address", .type = FR_TYPE_IPV6_ADDR, .dict = &dict_freeradius },
 	{ .out = &attr_packet_src_port, .name = "Packet-Src-Port", .type = FR_TYPE_UINT16, .dict = &dict_freeradius },
-	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_radius },
+	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_dhcpv4 },
 	{ .out = &attr_dhcp_message_type, .name = "DHCP-Message-Type", .type = FR_TYPE_UINT8, .dict = &dict_dhcpv4},
 	{ .out = &attr_dhcp_dhcp_server_identifier, .name = "DHCP-DHCP-Server-Identifier", .type = FR_TYPE_IPV4_ADDR, .dict = &dict_dhcpv4 },
 	{ .out = &attr_dhcp_your_ip_address, .name = "DHCP-Your-IP-Address", .type = FR_TYPE_IPV4_ADDR, .dict = &dict_dhcpv4 },
@@ -174,7 +172,7 @@ static RADIUS_PACKET *request_init(char const *filename)
 	if (fr_pair_list_afrom_file(request, dict_dhcpv4, &request->vps, fp, &filedone) < 0) {
 		fr_perror("dhcpclient");
 		fr_radius_packet_free(&request);
-		if (fp != stdin) fclose(fp);
+		if (fp && (fp != stdin)) fclose(fp);
 		return NULL;
 	}
 
@@ -193,7 +191,7 @@ static RADIUS_PACKET *request_init(char const *filename)
 			if (fr_value_box_from_str(vp, &vp->data, &type, NULL, vp->xlat, -1, '\0', false) < 0) {
 				fr_perror("dhcpclient");
 				fr_radius_packet_free(&request);
-				if (fp != stdin) fclose(fp);
+				if (fp && (fp != stdin)) fclose(fp);
 				return NULL;
 			}
 			vp->type = VT_DATA;
@@ -230,7 +228,7 @@ static RADIUS_PACKET *request_init(char const *filename)
 
 	} /* loop over the VP's we read in */
 
-	if (fp != stdin) fclose(fp);
+	if (fp && (fp != stdin)) fclose(fp);
 
 	/*
 	 *	And we're done.
@@ -544,7 +542,7 @@ static int send_with_pcap(RADIUS_PACKET **reply, RADIUS_PACKET *request)
 static void dhcp_packet_debug(RADIUS_PACKET *packet, bool received)
 {
 	fr_cursor_t	cursor;
-	char		buffer[256];
+	char		buffer[2048];
 
 	char		src_ipaddr[INET6_ADDRSTRLEN];
 	char		dst_ipaddr[INET6_ADDRSTRLEN];
@@ -664,7 +662,7 @@ int main(int argc, char **argv)
 
 	if (argc < 2) usage();
 
-	if (fr_dict_global_init(autofree, dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(autofree, dict_dir)) {
 		fr_perror("dhcpclient");
 		exit(EXIT_FAILURE);
 	}
@@ -679,7 +677,7 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	if (fr_dict_read(dict_freeradius, raddb_dir, FR_DICTIONARY_FILE) == -1) {
+	if (fr_dict_read(fr_dict_unconst(dict_freeradius), raddb_dir, FR_DICTIONARY_FILE) == -1) {
 		fr_perror("dhcpclient");
 		exit(EXIT_FAILURE);
 	}

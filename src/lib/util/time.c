@@ -20,7 +20,8 @@
  * @brief Platform independent time functions
  * @file lib/util/time.c
  *
- * @copyright 2016 Alan DeKok (aland@freeradius.org)
+ * @copyright 2016-2019 Alan DeKok (aland@freeradius.org)
+ * @copyright 2019-2020 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  */
 RCSID("$Id$")
 
@@ -52,6 +53,9 @@ USES_APPLE_DEPRECATED_API
 #include <stdatomic.h>
 
 static _Atomic int64_t			our_realtime;	//!< realtime at the start of the epoch in nanoseconds.
+static char const			*tz_names[2] = { NULL, NULL };	//!< normal, DST, from localtime_r(), tm_zone
+static long				gmtoff[2] = {0, 0};	       	//!< from localtime_r(), tm_gmtoff
+static int				isdst = 0;			//!< from localtime_r(), tm_is_dst
 
 #ifdef HAVE_CLOCK_GETTIME
 static int64_t				our_epoch;
@@ -68,8 +72,11 @@ static uint64_t				our_mach_epoch;
  *	- 0 on success.
  *	- -1 on failure.
  */
-static inline int fr_time_sync(void)
+int fr_time_sync(void)
 {
+	struct tm tm;
+	time_t now;
+
 	/*
 	 *	our_realtime represents system time
 	 *	at the start of our epoch.
@@ -94,7 +101,8 @@ static inline int fr_time_sync(void)
 				      fr_time_delta_from_timespec(&ts_realtime) -
 				      (fr_time_delta_from_timespec(&ts_monotime) - our_epoch),
 				      memory_order_release);
-		return 0;
+
+		now = ts_realtime.tv_sec;
 	}
 #else
 	{
@@ -110,10 +118,23 @@ static inline int fr_time_sync(void)
 		atomic_store_explicit(&our_realtime,
 				      fr_time_delta_from_timeval(&tv_realtime) -
 				      (monotime - our_mach_epoch) * (timebase.numer / timebase.denom,
-				      memory_order_release);
-		return 0;
+				      memory_order_release));
+
+		now = tv_realtime.tv_sec;
 	}
 #endif
+
+	/*
+	 *	Get local time zone name, daylight savings, and GMT
+	 *	offsets.
+	 */
+	(void) localtime_r(&now, &tm);
+
+	isdst = (tm.tm_isdst != 0);
+	tz_names[isdst] = tm.tm_zone;
+	gmtoff[isdst] = tm.tm_gmtoff * NSEC; /* they store seconds, we store nanoseconds */
+
+	return 0;
 }
 
 /** Initialize the local time.
@@ -167,15 +188,15 @@ fr_time_t fr_time(void)
 #endif
 }
 
-/** Nanoseconds since the Unix Epoch at the start of the Server Epoch
+/** Nanoseconds since the Unix Epoch the last time we synced internal time with wallclock time
  *
  */
-int64_t fr_time_wallclock_at_server_epoch(void)
+int64_t fr_time_wallclock_at_last_sync(void)
 {
 	return atomic_load_explicit(&our_realtime, memory_order_consume);
 }
 
-/** Convert an fr_time_t to our version of unix time (nsec since epoch)
+/** Convert an fr_time_t (internal time) to our version of unix time (wallclock time)
  *
  */
 fr_unix_time_t fr_time_to_unix_time(fr_time_t when)
@@ -184,7 +205,7 @@ fr_unix_time_t fr_time_to_unix_time(fr_time_t when)
 }
 
 
-/** Convert an fr_time_t to number of usec since the unix epoch
+/** Convert an fr_time_t (internal time) to number of usec since the unix epoch (wallclock time)
  *
  */
 int64_t fr_time_to_usec(fr_time_t when)
@@ -192,7 +213,7 @@ int64_t fr_time_to_usec(fr_time_t when)
 	return ((when + atomic_load_explicit(&our_realtime, memory_order_consume)) / 1000);
 }
 
-/** Convert an fr_time_t to number of msec since the unix epoch
+/** Convert an fr_time_t (internal time) to number of msec since the unix epoch (wallclock time)
  *
  */
 int64_t fr_time_to_msec(fr_time_t when)
@@ -200,7 +221,7 @@ int64_t fr_time_to_msec(fr_time_t when)
 	return ((when + atomic_load_explicit(&our_realtime, memory_order_consume)) / 1000000);
 }
 
-/** Convert an fr_time_t to number of sec since the unix epoch
+/** Convert an fr_time_t (internal time) to number of sec since the unix epoch (wallclock time)
  *
  */
 int64_t fr_time_to_sec(fr_time_t when)
@@ -208,7 +229,7 @@ int64_t fr_time_to_sec(fr_time_t when)
 	return ((when + atomic_load_explicit(&our_realtime, memory_order_consume)) / NSEC);
 }
 
-/** Convert a timeval to a fr_time_t
+/** Convert a timeval (wallclock time) to a fr_time_t (internal time)
  *
  * @param[in] when_tv	The timestamp to convert.
  * @return
@@ -221,7 +242,7 @@ fr_time_t fr_time_from_timeval(struct timeval const *when_tv)
 	return fr_time_delta_from_timeval(when_tv) - atomic_load_explicit(&our_realtime, memory_order_consume);
 }
 
-/** Convert a time_t to a fr_time_t
+/** Convert a time_t (wallclock time) to a fr_time_t (internal time)
  *
  * @param[in] when	The timestamp to convert.
  * @return
@@ -234,7 +255,7 @@ fr_time_t fr_time_from_sec(time_t when)
 	return (((fr_time_t) when) * NSEC) - atomic_load_explicit(&our_realtime, memory_order_consume);
 }
 
-/** Convert a timespec to a fr_time_t
+/** Convert a timespec (wallclock time) to a fr_time_t (internal time)
  *
  * @param[in] when_ts	The timestamp to convert.
  * @return
@@ -246,6 +267,46 @@ fr_time_t fr_time_from_timespec(struct timespec const *when_ts)
 {
 	return fr_time_delta_from_timespec(when_ts) - atomic_load_explicit(&our_realtime, memory_order_consume);
 }
+
+/** Return time delta from the time zone.
+ *
+ * Returns the delta between UTC and the timezone specified by tz
+ *
+ * @param[in] tz	time zone name
+ * @param[out] delta	the time delta
+ * @return
+ *	- 0 converted OK
+ *	- <0 on error
+ *
+ *  @note This function ONLY handles a limited number of time
+ *  zones: local and gmt.  It is impossible in general to parse
+ *  arbitrary time zone strings, as there are duplicates.
+ */
+int fr_time_delta_from_time_zone(char const *tz, fr_time_delta_t *delta)
+{
+	*delta = 0;
+
+	if ((strcmp(tz, "UTC") == 0) ||
+	    (strcmp(tz, "GMT") == 0)) {
+		return 0;
+	}
+
+	/*
+	 *	Our local time zone OR time zone with daylight savings.
+	 */
+	if (tz_names[0] && (strcmp(tz, tz_names[0]) == 0)) {
+		*delta = gmtoff[0];
+		return 0;
+	}
+
+	if (tz_names[1] && (strcmp(tz, tz_names[1]) == 0)) {
+		*delta = gmtoff[1];
+		return 0;
+	}
+
+	return -1;
+}
+
 
 /** Create fr_time_delta_t from a string
  *
@@ -440,128 +501,6 @@ done:
 	return 0;
 }
 
-/** Start time tracking for a request.
- *
- * @param[in] tt the time tracking structure.
- * @param[in] when the event happened
- * @param[out] worker time tracking for the worker thread
- */
-void fr_time_tracking_start(fr_time_tracking_t *tt, fr_time_t when, fr_time_tracking_t *worker)
-{
-	memset(tt, 0, sizeof(*tt));
-
-	tt->when = when;
-	tt->start = when;
-	tt->resumed = when;
-
-	fr_dlist_init(&(worker->list), fr_time_tracking_t, list.entry);
-	fr_dlist_entry_init(&tt->list.entry);
-}
-
-
-#define IALPHA (8)
-#define RTT(_old, _new) ((_new + ((IALPHA - 1) * _old)) / IALPHA)
-
-/** End time tracking for this request.
- *
- * After this call, all request processing should be finished.
- *
- * @param[in] tt the time tracking structure.
- * @param[in] when the event happened
- * @param[out] worker time tracking for the worker thread
- */
-void fr_time_tracking_end(fr_time_tracking_t *tt, fr_time_t when, fr_time_tracking_t *worker)
-{
-	tt->when = when;
-	tt->end = when;
-	tt->running += (tt->end - tt->resumed);
-
-	/*
-	 *	This request cannot be in any list.
-	 */
-	rad_assert(tt->list.entry.prev == &(tt->list.entry));
-	rad_assert(tt->list.entry.next == &(tt->list.entry));
-
-	/*
-	 *	Update the time that the worker spent processing the request.
-	 */
-	worker->running += tt->running;
-	worker->waiting += tt->waiting;
-
-	if (!worker->predicted) {
-		worker->predicted = tt->running;
-	} else {
-		worker->predicted = RTT(worker->predicted, tt->running);
-	}
-}
-
-
-/** Track that a request yielded.
- *
- * @param[in] tt the time tracking structure.
- * @param[in] when the event happened
- * @param[out] worker time tracking for the worker thread
- */
-void fr_time_tracking_yield(fr_time_tracking_t *tt, fr_time_t when, fr_time_tracking_t *worker)
-{
-	tt->when = when;
-	tt->yielded = when;
-
-	rad_assert(tt->resumed <= tt->yielded);
-	tt->running += (tt->yielded - tt->resumed);
-
-	/*
-	 *	Insert this request into the TAIL of the worker's list
-	 *	of waiting requests.
-	 */
-	fr_dlist_insert_head(&worker->list, tt);
-}
-
-
-/** Track that a request resumed.
- *
- * @param[in] tt the time tracking structure.
- * @param[in] when the event happened
- * @param[out] worker time tracking for the worker thread
- */
-void fr_time_tracking_resume(fr_time_tracking_t *tt, fr_time_t when, fr_time_tracking_t *worker)
-{
-	tt->when = when;
-	tt->resumed = when;
-
-	rad_assert(tt->resumed >= tt->yielded);
-
-	tt->waiting += (tt->resumed - tt->yielded);
-
-	/*
-	 *	Remove this request into the workers list of waiting
-	 *	requests.
-	 */
-	fr_dlist_remove(&worker->list, tt);
-}
-
-
-/** Print debug information about the time tracking structure
- *
- * @param[in] tt the time tracking structure
- * @param[in] fp the file where the debug output is printed.
- */
-void fr_time_tracking_debug(fr_time_tracking_t *tt, FILE *fp)
-{
-#define DPRINT(_x) fprintf(fp, "\t" #_x " = %"PRIu64"\n", tt->_x);
-
-	DPRINT(start);
-	DPRINT(end);
-	DPRINT(when);
-
-	DPRINT(yielded);
-	DPRINT(resumed);
-
-	DPRINT(predicted);
-	DPRINT(running);
-	DPRINT(waiting);
-}
-
 void fr_time_elapsed_update(fr_time_elapsed_t *elapsed, fr_time_t start, fr_time_t end)
 {
 	fr_time_t delay;
@@ -607,16 +546,35 @@ static const char *names[8] = {
 
 static char const *tab_string = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
 
-void fr_time_elapsed_fprint(FILE *fp, fr_time_elapsed_t const *elapsed, char const *prefix, int tabs)
+void fr_time_elapsed_fprint(FILE *fp, fr_time_elapsed_t const *elapsed, char const *prefix, int tab_offset)
 {
 	int i;
+	size_t prefix_len;
 
 	if (!prefix) prefix = "elapsed";
 
+	prefix_len = strlen(prefix);
+
 	for (i = 0; i < 8; i++) {
+		size_t len;
+
 		if (!elapsed->array[i]) continue;
 
-		fprintf(fp, "%s.%s\t%.*s%" PRIu64 "\n",
-			prefix, names[i], tabs, tab_string, elapsed->array[i]);
+		len = prefix_len + strlen(names[i]);
+
+		if (len >= (size_t) (tab_offset * 8)) {
+			fprintf(fp, "%s.%s %" PRIu64 "\n",
+				prefix, names[i], elapsed->array[i]);
+
+		} else {
+			int tabs;
+
+			tabs = ((tab_offset * 8) - len);
+			if ((tabs & 0x07) != 0) tabs += 7;
+			tabs >>= 3;
+
+			fprintf(fp, "%s.%s%.*s%" PRIu64 "\n",
+				prefix, names[i], tabs, tab_string, elapsed->array[i]);
+		}
 	}
 }

@@ -10,7 +10,7 @@
  *
  * @author Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  * @copyright 2015 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
- * @copyright 2013 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2013 Network RADIUS SARL (legal@networkradius.com)
  * @copyright 2013-2015 The FreeRADIUS Server Project.
  */
 #include <freeradius-devel/server/base.h>
@@ -192,6 +192,6 @@ rlm_rcode_t rlm_ldap_check_cached(rlm_ldap_t const *inst, REQUEST *request, VALU
  */
 fr_ldap_connection_t	*mod_conn_get(rlm_ldap_t const *inst, REQUEST *request);
 
-void		mod_conn_release(rlm_ldap_t const *inst, REQUEST *request, fr_ldap_connection_t *conn);
+void		ldap_mod_conn_release(rlm_ldap_t const *inst, REQUEST *request, fr_ldap_connection_t *conn);
 
-void		*mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);
+void		*ldap_mod_conn_create(TALLOC_CTX *ctx, void *instance, fr_time_delta_t timeout);

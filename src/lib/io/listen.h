@@ -16,7 +16,7 @@
  */
 #include <freeradius-devel/io/base.h>
 #include <freeradius-devel/io/application.h>
-
+#include <freeradius-devel/io/time_tracking.h>
 
 /** Describes a path data takes to/from the wire to/from VALUE_PAIRs
  *
@@ -38,6 +38,7 @@ struct fr_listen {
 	CONF_SECTION		*server_cs;		//!< CONF_SECTION of the server
 
 	bool			connected;		//!< is this for a connected socket?
+	bool			track_duplicates;	//!< do we track duplicate packets?
 	size_t			default_message_size;	//!< copied from app_io, but may be changed
 	size_t			num_messages;		//!< for the message ring buffer
 };
@@ -45,12 +46,11 @@ struct fr_listen {
 /**
  *	Minimal data structure to use the new code.
  */
-struct fr_async_t {
-	fr_io_process_t		process;		//!< The current state function.
+struct fr_async_s {
+	module_method_t		process;		//!< The current state function.
 	void			*process_inst;		//!< Instance data for the current state machine.
 
 	fr_time_t		recv_time;
-	fr_time_t		*original_recv_time;
 	fr_event_list_t		*el;
 
 	fr_time_tracking_t	tracking;
@@ -59,7 +59,7 @@ struct fr_async_t {
 	void			*packet_ctx;
 	fr_listen_t		*listen;	//!< How we received this request,
 						//!< and how we'll send the reply.
-	uint32_t		priority;
+	uint32_t		priority;	//!< higher == higher priority
 	bool			fake;		//!< is it a fake request
 };
 

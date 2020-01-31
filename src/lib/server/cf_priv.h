@@ -74,6 +74,7 @@ struct cf_pair {
 
 	bool			pass2;		//!< do expansion in pass2.
 	bool			parsed;		//!< Was this item used during parsing?
+	bool			printed;	//!< Was this item printed already in debug mode?
 	bool			referenced;	//!< Was this item referenced in the config?
 };
 
@@ -113,9 +114,10 @@ struct cf_data {
 };
 
 typedef struct {
-	char const		*filename;
-	CONF_SECTION		*cs;
-	struct stat		buf;
+	char const		*filename;	//!< name of the file
+	CONF_SECTION		*cs;		//!< CONF_SECTION associated with the file
+	struct stat		buf;		//!< stat about the file
+	bool			from_dir;	//!< was read from a directory
 } cf_file_t;
 
 CONF_ITEM *cf_remove(CONF_ITEM *parent, CONF_ITEM *child);

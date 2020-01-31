@@ -110,7 +110,7 @@ typedef struct {
  * @param[in] now	The current time.
  * @param[in] uctx	User ctx passed to #fr_event_timer_in or #fr_event_timer_at.
  */
-typedef	void (*fr_event_cb_t)(fr_event_list_t *el, fr_time_t now, void *uctx);
+typedef	void (*fr_event_timer_cb_t)(fr_event_list_t *el, fr_time_t now, void *uctx);
 
 /** Called after each event loop cycle
  *
@@ -157,6 +157,12 @@ typedef void (*fr_event_pid_cb_t)(fr_event_list_t *el, pid_t pid, int status, vo
  */
 typedef void (*fr_event_user_handler_t)(int kq, struct kevent const *kev, void *uctx);
 
+/** Alternative time source, useful for testing
+ *
+ * @return the current time in nanoseconds past the epoch.
+ */
+typedef fr_time_t (*fr_event_time_source_t)(void);
+
 /** Callbacks for the #FR_EVENT_FILTER_IO filter
  */
 typedef struct {
@@ -192,7 +198,7 @@ typedef union {
 int		fr_event_list_num_fds(fr_event_list_t *el);
 int		fr_event_list_num_timers(fr_event_list_t *el);
 int		fr_event_list_kq(fr_event_list_t *el);
-fr_time_t	fr_event_list_time(fr_event_list_t *el);
+fr_time_t	fr_event_list_time(fr_event_list_t *el) CC_HINT(nonnull);
 
 int		fr_event_fd_delete(fr_event_list_t *el, int fd, fr_event_filter_t filter);
 
@@ -215,9 +221,9 @@ int		fr_event_pid_wait(TALLOC_CTX *ctx, fr_event_list_t *el, fr_event_pid_t cons
 				  pid_t pid, fr_event_pid_cb_t wait_fn, void *uctx) CC_HINT(nonnull(2,5));
 
 int		fr_event_timer_at(TALLOC_CTX *ctx, fr_event_list_t *el, fr_event_timer_t const **ev,
-				  fr_time_t when, fr_event_cb_t callback, void const *uctx);
+				  fr_time_t when, fr_event_timer_cb_t callback, void const *uctx);
 int		fr_event_timer_in(TALLOC_CTX *ctx, fr_event_list_t *el, fr_event_timer_t const **ev,
-				  fr_time_delta_t delta, fr_event_cb_t callback, void const *uctx);
+				  fr_time_delta_t delta, fr_event_timer_cb_t callback, void const *uctx);
 int		fr_event_timer_delete(fr_event_list_t *el, fr_event_timer_t const **ev);
 int		fr_event_timer_run(fr_event_list_t *el, fr_time_t *when);
 
@@ -227,10 +233,10 @@ int		fr_event_user_delete(fr_event_list_t *el, fr_event_user_handler_t user, voi
 int		fr_event_pre_insert(fr_event_list_t *el, fr_event_status_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
 int		fr_event_pre_delete(fr_event_list_t *el, fr_event_status_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
 
-int		fr_event_post_insert(fr_event_list_t *el, fr_event_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
-int		fr_event_post_delete(fr_event_list_t *el, fr_event_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
+int		fr_event_post_insert(fr_event_list_t *el, fr_event_timer_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
+int		fr_event_post_delete(fr_event_list_t *el, fr_event_timer_cb_t callback, void *uctx) CC_HINT(nonnull(1,2));
 
-int		fr_event_corral(fr_event_list_t *el, bool wait);
+int		fr_event_corral(fr_event_list_t *el, fr_time_t now, bool wait);
 void		fr_event_service(fr_event_list_t *el);
 
 void		fr_event_loop_exit(fr_event_list_t *el, int code);
@@ -238,6 +244,7 @@ bool		fr_event_loop_exiting(fr_event_list_t *el);
 int		fr_event_loop(fr_event_list_t *el);
 
 fr_event_list_t	*fr_event_list_alloc(TALLOC_CTX *ctx, fr_event_status_cb_t status, void *status_ctx);
+void		fr_event_list_set_time_func(fr_event_list_t *el, fr_event_time_source_t func);
 
 #ifdef __cplusplus
 }

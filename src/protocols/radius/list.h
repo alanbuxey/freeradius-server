@@ -33,7 +33,7 @@ int fr_packet_cmp(RADIUS_PACKET const *a, RADIUS_PACKET const *b);
 void fr_request_from_reply(RADIUS_PACKET *request,
 			     RADIUS_PACKET const *reply);
 
-typedef struct fr_packet_list_t fr_packet_list_t;
+typedef struct fr_packet_list_s fr_packet_list_t;
 
 fr_packet_list_t *fr_packet_list_create(int alloc_id);
 void fr_packet_list_free(fr_packet_list_t *pl);
@@ -64,6 +64,7 @@ RADIUS_PACKET *fr_packet_list_recv(fr_packet_list_t *pl, fd_set *set, uint32_t m
 uint32_t fr_packet_list_num_incoming(fr_packet_list_t *pl);
 uint32_t fr_packet_list_num_outgoing(fr_packet_list_t *pl);
 void fr_packet_header_log(fr_log_t const *log, RADIUS_PACKET *packet, bool received);
+void fr_packet_log(fr_log_t const *log, RADIUS_PACKET *packet, bool received);
 
 /*
  *	"find" returns a pointer to the RADIUS_PACKET* member in the

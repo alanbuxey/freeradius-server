@@ -20,8 +20,9 @@
  *
  * @copyright 2017 The FreeRADIUS server project
  */
-#include <freeradius-devel/util/base64.h>
 #include <freeradius-devel/tls/log.h>
+#include <freeradius-devel/util/base64.h>
+#include <freeradius-devel/util/rand.h>
 #include <openssl/evp.h>
 #include "base.h"
 #include "id.h"
@@ -634,7 +635,7 @@ int fr_aka_sim_id_3gpp_pseudonym_decrypt(char out[AKA_SIM_IMSI_MAX_LEN + 1],
  */
 #include <stddef.h>
 #include <stdbool.h>
-#include <freeradius-devel/util/cutest.h>
+#include <freeradius-devel/util/acutest.h>
 
 void test_encrypt_decypt_key0(void)
 {

@@ -1,0 +1,21 @@
+#  -*- text -*-
+#  Copyright (C) 2019 Network RADIUS SARL <legal@networkradius.com>
+#  This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
+#
+#  Version $Id$
+#
+
+proto dhcpv6
+proto-dictionary dhcpv6
+
+#
+#  Bool
+#
+encode-pair Rapid-Commit = 0x
+match 00 0e 00 00
+
+decode-pair -
+match Rapid-Commit = 0x
+
+count
+match 6

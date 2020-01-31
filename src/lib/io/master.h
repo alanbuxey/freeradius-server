@@ -55,7 +55,11 @@ typedef struct {
 	fr_time_t			dynamic;	//!< timestamp for packet doing dynamic client definition
 	fr_io_address_t   		*address;	//!< of this packet.. shared between multiple packets
 	fr_io_client_t			*client;	//!< client handling this packet.
-	uint8_t				packet[20];	//!< original request packet
+
+	union {
+		uint8_t				packet[20];	//!< original request packet
+		fr_dlist_t		entry;
+	};
 } fr_io_track_t;
 
 /** The master IO instance
@@ -72,7 +76,7 @@ typedef struct {
  *  creates the listener, and adds it to the scheduler.
  */
 typedef struct {
-	dl_module_inst_t const   		*dl_inst;			//!< our parent dl_inst
+	dl_module_inst_t const   	*dl_inst;			//!< our parent dl_inst
 
 	uint32_t			max_connections;		//!< maximum number of connections to allow
 	uint32_t			max_clients;			//!< maximum number of dynamic clients to allow
@@ -87,10 +91,10 @@ typedef struct {
 
 	CONF_SECTION			*server_cs;			//!< server CS for this listener
 
-	dl_module_inst_t			*submodule;			//!< As provided by the transport_parse
+	dl_module_inst_t		*submodule;			//!< As provided by the transport_parse
 									///< callback.  Broken out into the
 									///< app_io_* fields below for convenience.
-	dl_module_inst_t			*dynamic_submodule;		//!< for dynamically defined clients
+	dl_module_inst_t		*dynamic_submodule;		//!< for dynamically defined clients
 
 	fr_app_t			*app;				//!< main protocol handler
 	void				*app_instance;			//!< instance data for main protocol handler

@@ -28,9 +28,9 @@ RCSIDH(talloc_h, "$Id$")
 extern "C" {
 #endif
 
+#include <freeradius-devel/autoconf.h>	/* Very easy to miss including in special builds */
 #include <freeradius-devel/build.h>
 #include <freeradius-devel/missing.h>
-
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,7 +45,7 @@ TALLOC_CTX	*talloc_page_aligned_pool(TALLOC_CTX *ctx, void **start, void **end, 
 /*
  *	Add variant that zeroes out newly allocated memory
  */
-#ifdef HAVE__TALLOC_POOLED_OBJECT
+#if defined(HAVE__TALLOC_POOLED_OBJECT) && defined(talloc_pooled_object)
 #  define HAVE_TALLOC_ZERO_POOLED_OBJECT	1
 #  define HAVE_TALLOC_POOLED_OBJECT		1
 
@@ -71,6 +71,7 @@ static inline TALLOC_CTX *_talloc_zero_pooled_object(const void *ctx,
 #else
 #  define	talloc_zero_pooled_object(_ctx, _type, _num_subobjects, _total_subobjects_size) \
 		talloc_zero(_ctx, _type)
+#undef talloc_pooled_object
 #  define	talloc_pooled_object(_ctx, _type, _num_subobjects, _total_subobjects_size) \
 		talloc(_ctx, _type)
 #endif
@@ -95,13 +96,13 @@ int		talloc_memcmp_array(uint8_t const *a, uint8_t const *b);
 
 int		talloc_memcmp_bstr(char const *a, char const *b);
 
-void		talloc_decrease_ref_count(void const *ptr);
+int		talloc_decrease_ref_count(void const *ptr);
 
 void		**talloc_array_null_terminate(void **array);
 
 void		**talloc_array_null_strip(void **array);
 
-void		talloc_const_free(void const *ptr);
+int		talloc_const_free(void const *ptr);
 
 /** Free a list of talloced structures containing a next field
  *
@@ -156,6 +157,11 @@ static inline void *_talloc_list_get_type_abort(void *head, size_t offset, char 
 #else
 #  define talloc_get_type_abort_const talloc_get_type_abort
 #endif
+
+typedef struct talloc_child_ctx_s TALLOC_CHILD_CTX;
+
+TALLOC_CHILD_CTX	*talloc_child_ctx_init(TALLOC_CTX *ctx);
+TALLOC_CHILD_CTX	*talloc_child_ctx_alloc(TALLOC_CHILD_CTX *parent) CC_HINT(nonnull);
 
 #ifdef __cplusplus
 }

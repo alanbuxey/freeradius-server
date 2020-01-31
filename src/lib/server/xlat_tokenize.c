@@ -283,6 +283,7 @@ static inline ssize_t xlat_tokenize_function(TALLOC_CTX *ctx, xlat_exp_t **head,
 	p += slen;
 	if (*(p - 1) != '}') {	/* @fixme: xlat_tokenize_literal should not consume the closing brace */
 		fr_strerror_printf("No matching closing brace");
+		talloc_free(node);
 		return -1;						/* error @ second character of format string */
 	}
 
@@ -344,6 +345,7 @@ static inline ssize_t xlat_tokenize_attribute(TALLOC_CTX *ctx, xlat_exp_t **head
 
 	if (*q != '}') {
 		fr_strerror_printf("No matching closing brace");
+		talloc_free(vpt);
 		return -1;						/* error @ second character of format string */
 	}
 
@@ -356,7 +358,7 @@ static inline ssize_t xlat_tokenize_attribute(TALLOC_CTX *ctx, xlat_exp_t **head
 	 */
 	if (tmpl_is_attr_undefined(vpt)) {
 		func = xlat_func_find(vpt->tmpl_unknown_name);
-		if (func) {
+		if (func && (func->type == XLAT_FUNC_SYNC)) {
 			node = xlat_exp_alloc(ctx, XLAT_VIRTUAL,
 					      vpt->tmpl_unknown_name, talloc_array_length(vpt->tmpl_unknown_name) - 1);
 			talloc_free(vpt);	/* Free the tmpl, we don't need it */
@@ -666,6 +668,7 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, xlat_exp_t **head, char co
 	 */
 	if (brace) {
 		fr_strerror_printf("Missing closing brace at end of string");
+		talloc_free(node);
 		return -(p - fmt);
 	}
 

@@ -33,13 +33,13 @@ RCSID("$Id$")
  *
  * This is a shim function added to 'fake' requests by the subrequest and parallel keywords.
  */
-rlm_rcode_t unlang_io_process_interpret(UNUSED void const *instance, REQUEST *request)
+rlm_rcode_t unlang_io_process_interpret(UNUSED void *instance, UNUSED void *thread, REQUEST *request)
 {
 	rlm_rcode_t rcode;
 
 	REQUEST_VERIFY(request);
 
-	rcode = unlang_interpret_resume(request);
+	rcode = unlang_interpret(request);
 
 	/*
 	 *	We've yielded, and can keep running.  Do so.
@@ -108,7 +108,6 @@ REQUEST *unlang_io_subrequest_alloc(REQUEST *parent, fr_dict_t const *namespace,
 #define COPY_FIELD(_x) child->async->_x = parent->async->_x
 	COPY_FIELD(listen);
 	COPY_FIELD(recv_time);
-	child->async->original_recv_time = &child->async->recv_time;
 	child->async->fake = true;
 
 	/*
@@ -117,13 +116,6 @@ REQUEST *unlang_io_subrequest_alloc(REQUEST *parent, fr_dict_t const *namespace,
 	 *	"unlang", and doesn't send replies or anything else.
 	 */
 	child->async->process = unlang_io_process_interpret;
-
-	/*
-	 *	Note that we don't do time tracking on the child.
-	 *	Instead, all of it is done in the context of the
-	 *	parent.
-	 */
-	fr_dlist_init(&child->async->tracking.list, fr_time_tracking_t, list.entry);
 
 	return child;
 }

@@ -75,7 +75,7 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_stats_dict[];
 fr_dict_autoload_t rlm_stats_dict[] = {
@@ -312,9 +312,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_stats(void *instance, void *thread, REQU
 		da = fr_dict_attr_by_name(dict_radius, buffer);
 		if (!da) continue;
 
-		vp = fr_pair_afrom_da(request->reply, da);
-		if (!vp) return RLM_MODULE_FAIL;
-
+		MEM(vp = fr_pair_afrom_da(request->reply, da));
 		vp->vp_uint64 = local_stats[i];
 
 		fr_cursor_append(&cursor, vp);

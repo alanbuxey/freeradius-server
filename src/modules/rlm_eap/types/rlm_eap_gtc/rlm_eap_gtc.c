@@ -48,8 +48,8 @@ static CONF_PARSER submodule_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_gtc_dict[];
 fr_dict_autoload_t rlm_eap_gtc_dict[] = {
@@ -86,11 +86,11 @@ static int auth_type_parse(UNUSED TALLOC_CTX *ctx, void *out, UNUSED void *paren
 {
 	char const	*auth_type = cf_pair_value(cf_item_to_pair(ci));
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, auth_type) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), auth_type) < 0) {
 		cf_log_err(ci, "Failed adding %s alias", attr_auth_type->name);
 		return -1;
 	}
-	*((fr_dict_enum_t **)out) = fr_dict_enum_by_alias(attr_auth_type, auth_type, -1);
+	*((fr_dict_enum_t **)out) = fr_dict_enum_by_name(attr_auth_type, auth_type, -1);
 
 	return 0;
 }
@@ -105,7 +105,7 @@ static rlm_rcode_t mod_process_auth_type(UNUSED void *instance, UNUSED void *thr
 	eap_session_t	*eap_session = eap_session_get(request->parent);
 	eap_round_t	*eap_round = eap_session->this_round;
 
-	rcode = unlang_interpret_resume(request);
+	rcode = unlang_interpret(request);
 
 	if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_REJECT;
 
@@ -166,7 +166,7 @@ static rlm_rcode_t mod_process(void *instance, void *thread, REQUEST *request)
 	fr_pair_value_bstrncpy(vp, eap_round->response->type.data, eap_round->response->type.length);
 	vp->vp_tainted = true;
 
-	unlang = cf_section_find(request->server_cs, "authenticate", inst->auth_type->alias);
+	unlang = cf_section_find(request->server_cs, "authenticate", inst->auth_type->name);
 	if (!unlang) {
 		/*
 		 *	Call the authenticate section of the *current* virtual server.

@@ -30,8 +30,8 @@
 #include <freeradius-devel/server/rad_assert.h>
 #include <freeradius-devel/vqp/vqp.h>
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_vmps;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_vmps;
 
 extern fr_dict_autoload_t proto_vmps_dynamic_client_dict[];
 fr_dict_autoload_t proto_vmps_dynamic_client_dict[] = {
@@ -57,7 +57,7 @@ fr_dict_attr_autoload_t proto_vmps_dynamic_client_dict_attr[] = {
 #define CLIENT_ADD	(1)
 #define CLIENT_NAK	(257)
 
-static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
+static rlm_rcode_t mod_process(UNUSED void *instance, UNUSED void *thread, REQUEST *request)
 {
 	rlm_rcode_t rcode;
 	CONF_SECTION *unlang;
@@ -85,7 +85,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -121,7 +121,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 

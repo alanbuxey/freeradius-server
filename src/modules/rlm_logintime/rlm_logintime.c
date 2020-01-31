@@ -48,8 +48,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_logintime_dict[];
 fr_dict_autoload_t rlm_logintime_dict[] = {
@@ -104,7 +104,7 @@ static int time_of_day(UNUSED void *instance, REQUEST *request,
 	time_t		now;
 
 	if (strspn(check->vp_strvalue, "0123456789: ") != strlen(check->vp_strvalue)) {
-		RDEBUG2("Bad Time-Of-Day value \"%s\"", check->vp_strvalue);
+		RDEBUG2("Bad Time-Of-Day value \"%pV\"", &check->data);
 		return -1;
 	}
 
@@ -119,7 +119,7 @@ static int time_of_day(UNUSED void *instance, REQUEST *request,
 	scan = atoi(p);
 	p = strchr(p, ':');
 	if ((scan > 23) || !p) {
-		RDEBUG2("Bad Time-Of-Day value \"%s\"", check->vp_strvalue);
+		RDEBUG2("Bad Time-Of-Day value \"%pV\"", &check->data);
 		return -1;
 	}
 	when = scan * 3600;
@@ -127,7 +127,7 @@ static int time_of_day(UNUSED void *instance, REQUEST *request,
 
 	scan = atoi(p);
 	if (scan > 59) {
-		RDEBUG2("Bad Time-Of-Day value \"%s\"", check->vp_strvalue);
+		RDEBUG2("Bad Time-Of-Day value \"%pV\"", &check->data);
 		return -1;
 	}
 	when += scan * 60;
@@ -136,7 +136,7 @@ static int time_of_day(UNUSED void *instance, REQUEST *request,
 	if (p) {
 		scan = atoi(p + 1);
 		if (scan > 59) {
-			RDEBUG2("Bad Time-Of-Day value \"%s\"", check->vp_strvalue);
+			RDEBUG2("Bad Time-Of-Day value \"%pV\"", &check->data);
 			return -1;
 		}
 		when += scan;

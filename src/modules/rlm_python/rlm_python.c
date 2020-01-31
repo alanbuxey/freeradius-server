@@ -376,13 +376,8 @@ static void mod_vptuple(TALLOC_CTX *ctx, rlm_python_t const *inst, REQUEST *requ
 			continue;
 		}
 
-		vp = fr_pair_afrom_da(ctx, dst->tmpl_da);
+		MEM(vp = fr_pair_afrom_da(ctx, dst->tmpl_da));
 		talloc_free(dst);
-		if (!vp) {
-			ERROR("%s - Failed to create attribute %s:%s", funcname, list_name, s1);
-			continue;
-		}
-
 
 		vp->op = op;
 		if (fr_pair_value_from_str(vp, s2, -1, '\0', false) < 0) {
@@ -982,6 +977,12 @@ static int python_interpreter_init(rlm_python_t *inst, CONF_SECTION *conf)
 
 static void python_interpreter_free(UNUSED rlm_python_t *inst, PyThreadState *interp)
 {
+	/*
+	 *	We incremented the reference count earlier
+	 *	during module initialisation.
+	 */
+	Py_XDECREF(inst->module);
+
 	PyEval_RestoreThread(interp);	/* Switches thread state and locks GIL */
 	Py_EndInterpreter(interp);	/* Destroys interpreter (GIL still locked) - sets thread state to NULL */
 	PyThreadState_Swap(global_interpreter);	/* Get a none-null thread state */

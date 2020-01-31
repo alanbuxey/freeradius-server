@@ -116,8 +116,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_sql_dict[];
 fr_dict_autoload_t rlm_sql_dict[] = {
@@ -656,7 +656,7 @@ int sql_set_user(rlm_sql_t const *inst, REQUEST *request, char const *username)
 	 */
 	MEM(pair_update_request(&vp, inst->sql_user) >= 0);
 	fr_pair_value_strsteal(vp, expanded);
-	RDEBUG2("SQL-User-Name set to '%s'", vp->vp_strvalue);
+	RDEBUG2("SQL-User-Name set to '%pV'", &vp->data);
 
 	return 0;
 }
@@ -1162,7 +1162,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 	 */
 	INFO("Attempting to connect to database \"%s\"", inst->config->sql_db);
 
-	inst->pool = module_connection_pool_init(inst->cs, inst, mod_conn_create, NULL, NULL, NULL, NULL);
+	inst->pool = module_connection_pool_init(inst->cs, inst, sql_mod_conn_create, NULL, NULL, NULL, NULL);
 	if (!inst->pool) return -1;
 
 	return RLM_MODULE_OK;

@@ -84,7 +84,7 @@ typedef struct {
 	uint16_t tlv_len;
 } soh_tlv;
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t soh_dict[];
 fr_dict_autoload_t soh_dict[] = {
@@ -223,7 +223,7 @@ static int eap_peap_soh_mstlv(REQUEST *request, uint8_t const *p, unsigned int d
 			vp->vp_uint32 = soh_pull_be_16(p);
 			p += 2;
 
-			MEM(pair_update_request(&vp, attr_soh_ms_machine_sp_release) >= 0)
+			MEM(pair_update_request(&vp, attr_soh_ms_machine_sp_release) >= 0);
 			vp->vp_uint32 = soh_pull_be_16(p);
 			p += 2;
 

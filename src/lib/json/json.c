@@ -22,7 +22,7 @@
  * @author Arran Cudbard-Bell
  *
  * @copyright 2015 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
- * @copyright 2015 Network RADIUS SARL (info@networkradius.com)
+ * @copyright 2015 Network RADIUS SARL (legal@networkradius.com)
  * @copyright 2015 The FreeRADIUS Server Project
  */
 #include <freeradius-devel/server/rad_assert.h>
@@ -62,7 +62,7 @@ int fr_json_object_to_value_box(TALLOC_CTX *ctx, fr_value_box_t *out, json_objec
 		/*
 		 *	If an alias exists, use that value instead
 		 */
-		found = fr_dict_enum_by_alias(enumv, value, len);
+		found = fr_dict_enum_by_name(enumv, value, len);
 		if (found) {
 			if (fr_value_box_copy(ctx, out, found->value) < 0) return -1;
 			return 0;
@@ -160,7 +160,7 @@ json_object *json_object_from_value_box(TALLOC_CTX *ctx, fr_value_box_t const *d
 		fr_dict_enum_t *enumv;
 
 		enumv = fr_dict_enum_by_value(data->enumv, data);
-		if (enumv) return json_object_new_string(enumv->alias);
+		if (enumv) return json_object_new_string(enumv->name);
 	}
 
 	switch (data->type) {
@@ -364,12 +364,13 @@ void fr_json_version_print(void)
  * @param[in] prefix	The prefix to use, can be NULL to skip the prefix.
  * @return JSON string representation of the value pairs
  */
-const char *fr_json_afrom_pair_list(TALLOC_CTX *ctx, VALUE_PAIR **vps, const char *prefix)
+char *fr_json_afrom_pair_list(TALLOC_CTX *ctx, VALUE_PAIR **vps, const char *prefix)
 {
 	fr_cursor_t		cursor;
 	VALUE_PAIR 		*vp;
 	struct json_object	*obj;
 	const char		*p;
+	char			*out;
 	char			buf[FR_DICT_ATTR_MAX_NAME_LEN + 32];
 
 	MEM(obj = json_object_new_object());
@@ -445,10 +446,10 @@ const char *fr_json_afrom_pair_list(TALLOC_CTX *ctx, VALUE_PAIR **vps, const cha
 	}
 
 	MEM(p = json_object_to_json_string_ext(obj, JSON_C_TO_STRING_PLAIN));
-	MEM(p = talloc_strdup(ctx, p));
+	MEM(out = talloc_strdup(ctx, p));
 
 	json_object_put(obj);	/* Should also free string buff from above */
 
-	return p;
+	return out;
 }
 

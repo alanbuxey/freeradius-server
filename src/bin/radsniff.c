@@ -87,8 +87,8 @@ static fr_table_num_sorted_t const rs_events[] = {
 };
 static size_t rs_events_len = NUM_ELEMENTS(rs_events);
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t radsniff_dict[];
 fr_dict_autoload_t radsniff_dict[] = {
@@ -2561,7 +2561,7 @@ int main(int argc, char *argv[])
 							 conf->pcap_filter, conf->pcap_filter);
 	}
 
-	if (fr_dict_global_init(conf, dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(conf, dict_dir)) {
 		fr_perror("radsniff");
 		exit(EXIT_FAILURE);
 	}
@@ -2578,7 +2578,7 @@ int main(int argc, char *argv[])
 		goto finish;
 	}
 
-	if (fr_dict_read(dict_freeradius, raddb_dir, FR_DICTIONARY_FILE) == -1) {
+	if (fr_dict_read(fr_dict_unconst(dict_freeradius), raddb_dir, FR_DICTIONARY_FILE) == -1) {
 		fr_perror("radsniff");
 		ret = 64;
 		goto finish;

@@ -26,7 +26,7 @@
 RCSID("$Id$")
 
 #define LOG_PREFIX "rlm_eap (%s) - "
-#define LOG_PREFIX_ARGS inst->name
+#define LOG_PREFIX_ARGS dl_module_instance_name_by_data(inst)
 
 #include <freeradius-devel/server/base.h>
 #include <freeradius-devel/server/module.h>
@@ -69,8 +69,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_eap_dict[];
 fr_dict_autoload_t rlm_eap_dict[] = {
@@ -167,10 +167,11 @@ static int submodule_parse(UNUSED TALLOC_CTX *ctx, void *out, UNUSED void *paren
 	case FR_EAP_METHOD_SIM:
 	{
 		rlm_eap_t *inst = ((dl_module_inst_t *)cf_data_value(cf_data_find(eap_cs,
-									       dl_module_inst_t, "rlm_eap")))->data;
+								     dl_module_inst_t, "rlm_eap")))->data;
 
 		WARN("Ignoring EAP method %s because we don't have OpenSSL support", name);
 
+		talloc_free(our_name);
 	}
 		return 0;
 
@@ -616,10 +617,17 @@ static rlm_rcode_t eap_method_select(rlm_eap_t *inst, UNUSED void *thread, eap_s
 								     request->dict));
 
 	if (method->submodule->clone_parent_lists) {
-		fr_pair_list_copy(eap_session->subrequest, &eap_session->subrequest->control, request->control);
-		fr_pair_list_copy(eap_session->subrequest->packet,
-				  &eap_session->subrequest->packet->vps,
-				  request->packet->vps);
+		if (fr_pair_list_copy(eap_session->subrequest,
+				      &eap_session->subrequest->control, request->control) < 0) {
+		list_copy_fail:
+			RERROR("Failed copying parent's attribute list");
+			TALLOC_FREE(eap_session->subrequest);
+			return RLM_MODULE_FAIL;
+		}
+
+		if (fr_pair_list_copy(eap_session->subrequest->packet,
+				      &eap_session->subrequest->packet->vps,
+				      request->packet->vps) < 0) goto list_copy_fail;
 	}
 
 	/*
@@ -654,6 +662,7 @@ static rlm_rcode_t eap_method_select(rlm_eap_t *inst, UNUSED void *thread, eap_s
 	 */
 	return unlang_module_yield_to_subrequest(&eap_session->submodule_rcode, eap_session->subrequest,
 						 mod_authenticate_result_async, mod_authenticate_cancel,
+						 &(unlang_subrequest_session_t){ .enable = true, .unique_ptr = eap_session },
 						 eap_session);
 }
 
@@ -987,11 +996,11 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	inst->name = cf_section_name2(cs);
 	if (!inst->name) inst->name = "eap";
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, inst->name) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), inst->name) < 0) {
 		PERROR("Failed adding %s alias", inst->name);
 		return -1;
 	}
-	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name, -1);
+	inst->auth_type = fr_dict_enum_by_name(attr_auth_type, inst->name, -1);
 	rad_assert(inst->name);
 
 	/*
@@ -1016,7 +1025,7 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 		/*
 		 *	Add the methods the submodule provides
 		 */
-		for (j = 0; i < MAX_PROVIDED_METHODS; j++) {
+		for (j = 0; j < MAX_PROVIDED_METHODS; j++) {
 			if (!submodule->provides[j]) break;
 
 			method = submodule->provides[j];

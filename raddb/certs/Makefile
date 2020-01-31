@@ -17,9 +17,10 @@ PARTIAL		= -partial_chain
 endif
 
 #
-#  Set the passwords
+#	Just to mute the WARNING messages complaining about the missing openssl.cnf
 #
-include passwords.mk
+OPENSSL_CONF := /dev/null
+export OPENSSL_CONF
 
 ######################################################################
 #
@@ -47,7 +48,14 @@ inner-server: rsa/inner-server.pem rsa/inner-server.vrfy ecc/inner-server.pem ec
 .PHONY: verify
 verify: rsa/server.vrfy rsa/client.vrfy ecc/server.vrfy ecc/client.vrfy
 
+######################################################################
+#
+#  Set the passwords once, so we don't have to do it on every
+#  invocation of "make".
+#
+######################################################################
 passwords.mk: server.cnf ca.cnf client.cnf inner-server.cnf ocsp.cnf
+	@echo BUILD passwords.mk
 	@echo "PASSWORD_SERVER	= '$(shell grep output_password server.cnf | sed 's/.*=//;s/^ *//')'"		> $@
 	@echo "PASSWORD_INNER	= '$(shell grep output_password inner-server.cnf | sed 's/.*=//;s/^ *//')'"	>> $@
 	@echo "PASSWORD_CA	= '$(shell grep output_password ca.cnf | sed 's/.*=//;s/^ *//')'"		>> $@
@@ -55,6 +63,8 @@ passwords.mk: server.cnf ca.cnf client.cnf inner-server.cnf ocsp.cnf
 	@echo "PASSWORD_OCSP	= '$(shell grep output_password ocsp.cnf | sed 's/.*=//;s/^ *//')'"		>> $@
 	@echo "USER_NAME	= '$(shell grep emailAddress client.cnf | grep '@' | sed 's/.*=//;s/^ *//')'"	>> $@
 	@echo "CA_DEFAULT_DAYS  = '$(shell grep default_days ca.cnf | sed 's/.*=//;s/^ *//')'"			>> $@
+
+-include passwords.mk
 
 ######################################################################
 #

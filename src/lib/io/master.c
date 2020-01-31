@@ -41,6 +41,8 @@ typedef struct {
 	fr_heap_t			*pending_clients;		//!< heap of pending clients
 	fr_heap_t			*alive_clients;			//!< heap of active clients
 
+	fr_dlist_head_t			track_list;			//!< list of free fr_io_track_t
+
 	fr_listen_t			*listen;			//!< The master IO path
 	fr_listen_t			*child;				//!< The child (app_io) IO path
 	fr_schedule_t			*sc;				//!< the scheduler
@@ -75,7 +77,7 @@ typedef enum {
 	PR_CLIENT_PENDING,				//!< dynamic client pending definition
 } fr_io_client_state_t;
 
-typedef struct fr_io_connection_t fr_io_connection_t;
+typedef struct fr_io_connection_s fr_io_connection_t;
 
 /** Client definitions for master IO
  *
@@ -120,7 +122,7 @@ struct fr_io_client_s {
  *  tell the parent it's alive, and the parent can push packets to the
  *  child.
  */
-struct fr_io_connection_t {
+struct fr_io_connection_s {
 	char const			*name;		//!< taken from proto_FOO_TRANSPORT
 	int				packets;	//!< number of packets using this connection
 	fr_io_address_t   		*address;      	//!< full information about the connection.
@@ -145,6 +147,7 @@ static fr_event_update_t resume_read[] = {
 	FR_EVENT_RESUME(fr_event_io_func_t, read),
 	{ 0 }
 };
+
 
 /*
  *  Return negative numbers to put 'one' at the top of the heap.
@@ -591,6 +594,7 @@ static fr_io_connection_t *fr_io_connection_alloc(fr_io_instance_t const *inst,
 		li->app_io = thread->child->app_io;
 		li->thread_instance = connection;
 		li->app_io_instance = dl_inst->data;
+		li->track_duplicates = thread->child->app_io->track_duplicates;
 
 		/*
 		 *	Create writable thread instance data.
@@ -629,6 +633,7 @@ static fr_io_connection_t *fr_io_connection_alloc(fr_io_instance_t const *inst,
 		li->connected = true;
 		li->thread_instance = connection;
 		li->app_io_instance = li->thread_instance;
+		li->track_duplicates = thread->child->app_io->track_duplicates;
 
 		/*
 		 *	Instantiate the child, and open the socket.
@@ -806,8 +811,8 @@ static RADCLIENT *radclient_alloc(TALLOC_CTX *ctx, int ipproto, fr_io_address_t 
 
 
 static fr_io_track_t *fr_io_track_add(fr_io_client_t *client,
-						    fr_io_address_t *address,
-						    uint8_t const *packet, fr_time_t recv_time, bool *is_dup)
+				      fr_io_address_t *address,
+				      uint8_t const *packet, fr_time_t recv_time, bool *is_dup)
 {
 	fr_io_track_t my_track, *track = NULL;
 
@@ -822,10 +827,16 @@ static fr_io_track_t *fr_io_track_add(fr_io_client_t *client,
 
 	if (client->inst->app_io->track_duplicates) track = rbtree_finddata(client->table, &my_track);
 	if (!track) {
-		MEM(track = talloc_zero(client, fr_io_track_t));
-		talloc_get_type_abort(track, fr_io_track_t);
+		track = fr_dlist_head(&client->thread->track_list);
+		if (!track) {
+			MEM(track = talloc_zero_pooled_object(client, fr_io_track_t, 2, sizeof(fr_io_address_t) + 128));
+		} else {
+			fr_dlist_remove(&client->thread->track_list, track);
+			memset(track, 0, sizeof(*track));
+		}
 
 		MEM(track->address = talloc_zero(track, fr_io_address_t));
+
 		memcpy(track->address, address, sizeof(*address));
 		track->address->radclient = client->radclient;
 
@@ -900,6 +911,28 @@ static fr_io_track_t *fr_io_track_add(fr_io_client_t *client,
 	return track;
 }
 
+
+static void track_free(fr_io_track_t *track)
+{
+	fr_io_thread_t *thread = track->client->thread;
+
+	if (track->ev) (void) fr_event_timer_delete(thread->el, &track->ev);
+
+	talloc_free_children(track);
+
+	/*
+	 *	Keep most recently used elements around.  But
+	 *	limit them to ~1000 entries.
+	 */
+	fr_dlist_insert_head(&thread->track_list, track);
+	if (fr_dlist_num_elements(&thread->track_list) > 1000) {
+		track = fr_dlist_tail(&thread->track_list);
+		fr_dlist_remove(&thread->track_list, track);
+		talloc_free(track);
+	}
+}
+
+
 static int pending_free(fr_io_pending_packet_t *pending)
 {
 	fr_io_track_t *track = pending->track;
@@ -925,8 +958,7 @@ static int pending_free(fr_io_pending_packet_t *pending)
 			(void) rbtree_deletebydata(track->client->table, track);
 		}
 
-		// @todo - put this into a slab allocator
-		talloc_free(track);
+		track_free(track);
 	}
 
 	return 0;
@@ -1009,7 +1041,7 @@ static int _client_live_free(fr_io_client_t *client)
  *
  *  The app_io->read does the transport-specific data read.
  */
-static ssize_t mod_read(fr_listen_t *li, void **packet_ctx, fr_time_t **recv_time_p,
+static ssize_t mod_read(fr_listen_t *li, void **packet_ctx, fr_time_t *recv_time_p,
 			uint8_t *buffer, size_t buffer_len, size_t *leftover, uint32_t *priority, bool *is_dup)
 {
 	fr_io_instance_t const *inst;
@@ -1093,10 +1125,9 @@ redo:
 		 *	caller, and return.
 		 */
 		*packet_ctx = track;
-		*recv_time_p = &track->timestamp;
 		*leftover = 0;
 		*priority = pending->priority;
-		recv_time = pending->recv_time;
+		recv_time = *recv_time_p = pending->recv_time;
 		client = track->client;
 
 		memcpy(buffer, pending->buffer, pending->buffer_len);
@@ -1159,7 +1190,6 @@ redo:
 
 	} else {
 		fr_io_address_t *local_address;
-		fr_time_t *local_recv_time;
 
 		/*
 		 *	We're either not a TCP socket, or we are a
@@ -1167,7 +1197,6 @@ redo:
 		 */
 do_read:
 		local_address = &address;
-		local_recv_time = &recv_time;
 
 		/*
 		 *	@todo - For connected TCP sockets which are
@@ -1187,7 +1216,7 @@ do_read:
 		 *	to have yet another layer of trampoline
 		 *	functions which do all of the TLS work.
 		 */
-		packet_len = inst->app_io->read(child, (void **) &local_address, &local_recv_time,
+		packet_len = inst->app_io->read(child, (void **) &local_address, &recv_time,
 					  buffer, buffer_len, leftover, priority, is_dup);
 		if (packet_len <= 0) {
 			return packet_len;
@@ -1526,7 +1555,7 @@ have_client:
 		/*
 		 *	Return the packet.
 		 */
-		*recv_time_p = &track->timestamp;
+		*recv_time_p = track->timestamp;
 		*packet_ctx = track;
 		return packet_len;
 	}
@@ -1694,14 +1723,19 @@ static void mod_event_list_set(fr_listen_t *li, fr_event_list_t *el, void *nr)
 	fr_io_instance_t const *inst;
 	fr_io_connection_t *connection;
 	fr_io_thread_t *thread;
+	fr_listen_t *child;
 
-	get_inst(li, &inst, &thread, &connection, NULL);
+	get_inst(li, &inst, &thread, &connection, &child);
 
 	/*
 	 *	We're not doing IO, so there are no timers for
 	 *	cleaning up packets, dynamic clients, or connections.
 	 */
 	if (!inst->submodule) return;
+
+	if (inst->app_io->event_list_set) {
+		inst->app_io->event_list_set(child, el, nr);
+	}
 
 	/*
 	 *	No dynamic clients AND no packet cleanups?  We don't
@@ -1966,8 +2000,8 @@ static void packet_expiry_timer(fr_event_list_t *el, fr_time_t now, void *uctx)
 
 	if (track->packets == 0) {
 		if (inst->app_io->track_duplicates) (void) rbtree_deletebydata(client->table, track);
-		talloc_free(track);
 
+		track_free(track);
 	} else {
 		if (track->reply) {
 			talloc_free(track->reply);
@@ -2072,8 +2106,16 @@ static ssize_t mod_write(fr_listen_t *li, void *packet_ctx, fr_time_t request_ti
 						 buffer, buffer_len, written);
 		if (packet_len > 0) {
 			rad_assert(buffer_len == (size_t) packet_len);
-			MEM(track->reply = talloc_memdup(track, buffer, buffer_len));
-			track->reply_len = buffer_len;
+
+			/*
+			 *	No need to stash the reply if we're
+			 *	not tracking duplicates.
+			 */
+			if (inst->app_io->track_duplicates) {
+				rad_assert(!track->reply);
+				MEM(track->reply = talloc_memdup(track, buffer, buffer_len));
+				track->reply_len = buffer_len;
+			}
 		} else {
 			track->reply_len = 1; /* don't respond */
 		}
@@ -2406,6 +2448,12 @@ static int mod_bootstrap(void *instance, CONF_SECTION *cs)
 	inst->app_io_conf = inst->submodule->conf;
 	inst->app_io_instance = inst->submodule->data;
 
+	/*
+	 *	If we're not tracking duplicatesm then we don't need a
+	 *	cleanup delay.
+	 */
+	if (!inst->app_io->track_duplicates) inst->cleanup_delay = 0;
+
 	if (inst->app_io->bootstrap && (inst->app_io->bootstrap(inst->app_io_instance,
 								inst->app_io_conf) < 0)) {
 		cf_log_err(inst->app_io_conf, "Bootstrap failed for proto_%s", inst->app_io->name);
@@ -2506,7 +2554,8 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 			memset(&parse_rules, 0, sizeof(parse_rules));
 			parse_rules.dict_def = virtual_server_namespace(cf_section_name2(inst->server_cs));
 
-			if (virtual_server_compile_sections(inst->server_cs, app_process->compile_list, &parse_rules) < 0) {
+			if (virtual_server_compile_sections(inst->server_cs, app_process->compile_list,
+							    &parse_rules, inst->dynamic_submodule->data) < 0) {
 				return -1;
 			}
 		}
@@ -2764,6 +2813,7 @@ int fr_master_io_listen(TALLOC_CTX *ctx, fr_io_instance_t *inst, fr_schedule_t *
 	thread = talloc_zero(NULL, fr_io_thread_t);
 	thread->listen = li;
 	thread->sc = sc;
+	fr_dlist_init(&thread->track_list, fr_io_track_t, entry);
 
 	talloc_set_destructor(thread, _thread_io_free);
 
@@ -2780,6 +2830,7 @@ int fr_master_io_listen(TALLOC_CTX *ctx, fr_io_instance_t *inst, fr_schedule_t *
 	li->app_io = &fr_master_app_io;
 	li->thread_instance = thread;
 	li->app_io_instance = inst;
+	li->track_duplicates = inst->app_io->track_duplicates;
 
 	/*
 	 *	The child listener points to the *actual* IO path.
@@ -2798,6 +2849,7 @@ int fr_master_io_listen(TALLOC_CTX *ctx, fr_io_instance_t *inst, fr_schedule_t *
 	 *	Reset these fields to point to the IO instance data.
 	 */
 	child->app_io = inst->app_io;
+	child->track_duplicates = inst->app_io->track_duplicates;
 
 	if (child->app_io->thread_inst_size > 0) {
 		child->thread_instance = talloc_zero_array(NULL, uint8_t,

@@ -53,7 +53,7 @@ uint32_t fr_hash_update(void const *data, size_t size, uint32_t hash);
 uint32_t fr_hash_string(char const *p);
 uint32_t fr_hash_case_string(char const *p);
 
-typedef struct fr_hash_table_t fr_hash_table_t;
+typedef struct fr_hash_table_s fr_hash_table_t;
 typedef void (*fr_hash_table_free_t)(void *);
 typedef uint32_t (*fr_hash_table_hash_t)(void const *);
 typedef int (*fr_hash_table_cmp_t)(void const *, void const *);
@@ -85,6 +85,8 @@ int		fr_hash_table_walk(fr_hash_table_t *ht,
 void		*fr_hash_table_iter_next(fr_hash_table_t *ht, fr_hash_iter_t *iter);
 
 void		*fr_hash_table_iter_init(fr_hash_table_t *ht, fr_hash_iter_t *iter);
+
+void		fr_hash_table_fill(fr_hash_table_t *ht);
 
 #ifdef __cplusplus
 }

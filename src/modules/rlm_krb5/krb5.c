@@ -34,7 +34,7 @@ RCSID("$Id$")
 #ifdef HAVE_KRB5_GET_ERROR_MESSAGE
 #  define KRB5_STRERROR_BUFSIZE (2048)
 
-fr_thread_local_setup(char *, krb5_error_buffer)	/* macro */
+fr_thread_local_setup(char *, krb5_error_buffer); /* macro */
 
 /*
  *	Explicitly cleanup the memory allocated to the error buffer.
@@ -110,7 +110,7 @@ static int _mod_conn_free(rlm_krb5_handle_t *conn) {
  * by libkrb5 and that it does connection caching associated with contexts, so it's
  * worth using a connection pool to preserve connections when workers die.
  */
-void *mod_conn_create(TALLOC_CTX *ctx, void *instance, UNUSED fr_time_delta_t timeout)
+void *krb5_mod_conn_create(TALLOC_CTX *ctx, void *instance, UNUSED fr_time_delta_t timeout)
 {
 	rlm_krb5_t const *inst = instance;
 	rlm_krb5_handle_t *conn;

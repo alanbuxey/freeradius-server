@@ -68,6 +68,7 @@ static fr_ipaddr_t client_ipaddr;
 static uint16_t client_port = 0;
 
 static int sockfd;
+static int last_used_id = -1;
 
 static char const *proto = NULL;
 static int ipproto = IPPROTO_UDP;
@@ -80,8 +81,8 @@ static rc_request_t *rc_request_tail = NULL;
 
 static char const *radclient_version = RADIUSD_VERSION_STRING_BUILD("radclient");
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t radclient_dict[];
 fr_dict_autoload_t radclient_dict[] = {
@@ -115,7 +116,6 @@ static fr_dict_attr_t const *attr_packet_src_port;
 
 static fr_dict_attr_t const *attr_radclient_test_name;
 static fr_dict_attr_t const *attr_request_authenticator;
-static fr_dict_attr_t const *attr_response_packet_type;
 
 static fr_dict_attr_t const *attr_chap_password;
 static fr_dict_attr_t const *attr_digest_attributes;
@@ -152,7 +152,6 @@ fr_dict_attr_autoload_t radclient_dict_attr[] = {
 	{ .out = &attr_chap_password, .name = "CHAP-Password", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_digest_attributes, .name = "Digest-Attributes", .type = FR_TYPE_OCTETS, .dict = &dict_radius },
 	{ .out = &attr_packet_type, .name = "Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_radius },
-	{ .out = &attr_response_packet_type, .name = "Response-Packet-Type", .type = FR_TYPE_UINT32, .dict = &dict_radius },
 	{ .out = &attr_user_password, .name = "User-Password", .type = FR_TYPE_STRING, .dict = &dict_radius },
 	{ NULL }
 };
@@ -171,6 +170,7 @@ static void NEVER_RETURNS usage(void)
 	fprintf(stderr, "                         If a second file is provided, it will be used to verify responses\n");
 	fprintf(stderr, "  -F                     Print the file name, packet number and reply code.\n");
 	fprintf(stderr, "  -h                     Print usage help information.\n");
+	fprintf(stderr, "  -i <id>                Set request id to 'id'.  Values may be 0..255\n");
 	fprintf(stderr, "  -n <num>               Send N requests/s\n");
 	fprintf(stderr, "  -p <num>               Send 'num' packets from a file in parallel.\n");
 	fprintf(stderr, "  -P <proto>             Use proto (tcp or udp) for transport.\n");
@@ -226,8 +226,7 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 	fr_pair_delete_by_da(&packet->vps, attr_ms_chap_challenge);
 	fr_pair_delete_by_da(&packet->vps, attr_ms_chap_response);
 
-	challenge = fr_pair_afrom_da(packet, attr_ms_chap_challenge);
-	if (!challenge) return 0;
+	MEM(challenge = fr_pair_afrom_da(packet, attr_ms_chap_challenge));
 
 	fr_pair_add(request, challenge);
 	challenge->vp_length = 8;
@@ -236,11 +235,7 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 		p[i] = fr_rand();
 	}
 
-	reply = fr_pair_afrom_da(packet, attr_ms_chap_response);
-	if (!reply) {
-		return 0;
-	}
-
+	MEM(reply = fr_pair_afrom_da(packet, attr_ms_chap_response));
 	fr_pair_add(request, reply);
 	reply->vp_length = 50;
 	reply->vp_octets = p = talloc_array(reply, uint8_t, reply->vp_length);
@@ -413,7 +408,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		request->packet->proto = ipproto;
 
 		request->files = files;
-		request->packet->id = -1; /* allocate when sending */
+		request->packet->id = last_used_id;
 		request->num = num++;
 
 		/*
@@ -485,7 +480,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 					vp->type = VT_DATA;
 				}
 
-				if ((vp->da == attr_response_packet_type) || (vp->da == attr_packet_type)) {
+				if (vp->da == attr_packet_type) {
 					vp = fr_cursor_remove(&cursor);	/* so we don't break the filter */
 					request->filter_code = vp->vp_uint32;
 					talloc_free(vp);
@@ -525,8 +520,6 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			 */
 			if (vp->da == attr_packet_type) {
 				request->packet->code = vp->vp_uint32;
-			} else if (vp->da == attr_response_packet_type) {
-				request->filter_code = vp->vp_uint32;
 			} else if (vp->da == attr_packet_dst_port) {
 				request->packet->dst_port = vp->vp_uint16;
 			} else if ((vp->da == attr_packet_dst_ip_address) ||
@@ -661,12 +654,12 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				break;
 
 			case FR_CODE_UNDEFINED:
-				REDEBUG("Both Packet-Type and Response-Packet-Type undefined, specify at least one, "
+				REDEBUG("Packet-Type must be defined,"
 					"or a well known RADIUS port");
 				goto error;
 
 			default:
-				REDEBUG("Can't determine expected Response-Packet-Type for Packet-Type %i",
+				REDEBUG("Can't determine expected &reply:Packet-Type for Packet-Type %i",
 					request->packet->code);
 				goto error;
 			}
@@ -696,7 +689,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				break;
 
 			default:
-				REDEBUG("Can't determine expected Packet-Type for Response-Packet-Type %i",
+				REDEBUG("Can't determine expected Packet-Type for &reply:Packet-Type %i",
 					request->filter_code);
 				goto error;
 			}
@@ -852,7 +845,7 @@ static int send_one_packet(rc_request_t *request)
 	/*
 	 *	Haven't sent the packet yet.  Initialize it.
 	 */
-	if (request->packet->id == -1) {
+	if (!request->tries) {
 		bool rcode;
 
 		assert(request->reply == NULL);
@@ -1003,8 +996,7 @@ static int send_one_packet(rc_request_t *request)
 		return -1;
 	}
 
-	fr_packet_header_log(&default_log, request->packet, false);
-	if (fr_debug_lvl > L_DBG_LVL_1) fr_pair_list_log(&default_log, request->packet->vps);
+	fr_packet_log(&default_log, request->packet, false);
 
 	return 0;
 }
@@ -1107,8 +1099,7 @@ static int recv_one_packet(fr_time_t wait_time)
 		goto packet_done;
 	}
 
-	fr_packet_header_log(&default_log, request->reply, true);
-	if (fr_debug_lvl >= L_DBG_LVL_1) fr_pair_list_log(&default_log, request->reply->vps);
+	fr_packet_log(&default_log, request->reply, true);
 
 	/*
 	 *	Increment counters...
@@ -1211,7 +1202,14 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	while ((c = getopt(argc, argv, "46c:d:D:f:Fhn:p:P:qr:sS:t:vx")) != -1) switch (c) {
+	/*
+	 *	Always log to stdout
+	 */
+	default_log.dst = L_DST_STDOUT;
+	default_log.fd = STDOUT_FILENO;
+	default_log.print_level = false;
+
+	while ((c = getopt(argc, argv, "46c:d:D:f:Fhi:n:p:P:qr:sS:t:vx")) != -1) switch (c) {
 		case '4':
 			force_af = AF_INET;
 			break;
@@ -1257,6 +1255,15 @@ int main(int argc, char **argv)
 
 		case 'F':
 			print_filename = true;
+			break;
+
+		case 'i':
+			if (!isdigit((int) *optarg))
+				usage();
+			last_used_id = atoi(optarg);
+			if ((last_used_id < 0) || (last_used_id > 255)) {
+				usage();
+			}
 			break;
 
 		case 'n':
@@ -1348,6 +1355,7 @@ int main(int argc, char **argv)
 
 		case 'x':
 			fr_debug_lvl++;
+			if (fr_debug_lvl > 2) default_log.print_level = true;
 			break;
 
 		case 'h':
@@ -1356,12 +1364,6 @@ int main(int argc, char **argv)
 	}
 	argc -= (optind - 1);
 	argv += (optind - 1);
-
-	/*
-	 *	Always log to stdout
-	 */
-	default_log.dst = L_DST_STDOUT;
-	default_log.fd = STDOUT_FILENO;
 
 	if ((argc < 3)  || ((secret == NULL) && (argc < 4))) {
 		ERROR("Insufficient arguments");
@@ -1375,7 +1377,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (fr_dict_global_init(autofree, dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(autofree, dict_dir)) {
 		fr_perror("radclient");
 		return 1;
 	}
@@ -1395,7 +1397,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (fr_dict_read(dict_freeradius, raddb_dir, FR_DICTIONARY_FILE) == -1) {
+	if (fr_dict_read(fr_dict_unconst(dict_freeradius), raddb_dir, FR_DICTIONARY_FILE) == -1) {
 		fr_log_perror(&default_log, L_ERR, __FILE__, __LINE__, "Failed to initialize the dictionaries");
 		return 1;
 	}

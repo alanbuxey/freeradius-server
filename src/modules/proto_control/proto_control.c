@@ -63,7 +63,7 @@ static CONF_PARSER const proto_control_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_control;
+static fr_dict_t const *dict_control;
 
 extern fr_dict_autoload_t proto_control_dict[];
 fr_dict_autoload_t proto_control_dict[] = {
@@ -421,7 +421,7 @@ static int mod_instantiate(void *instance, CONF_SECTION *conf)
 
 		if (strcmp(name, "send") == 0) component = MOD_POST_AUTH;
 
-		if (unlang_compile(subcs, component, NULL) < 0) {
+		if (unlang_compile(subcs, component, NULL, NULL) < 0) {
 			cf_log_err(subcs, "Failed compiling '%s { ... }' section", name);
 			return -1;
 		}

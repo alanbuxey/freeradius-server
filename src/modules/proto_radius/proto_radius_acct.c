@@ -23,13 +23,14 @@
  * @copyright 2016 Alan DeKok (aland@deployingradius.com)
  */
 #include <freeradius-devel/io/application.h>
-#include <freeradius-devel/server/protocol.h>
+#include <freeradius-devel/radius/radius.h>
 #include <freeradius-devel/server/module.h>
+#include <freeradius-devel/server/protocol.h>
+#include <freeradius-devel/server/rad_assert.h>
 #include <freeradius-devel/unlang/base.h>
 #include <freeradius-devel/util/dict.h>
-#include <freeradius-devel/server/rad_assert.h>
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t proto_radius_acct_dict[];
 fr_dict_autoload_t proto_radius_acct_dict[] = {
@@ -48,7 +49,7 @@ fr_dict_attr_autoload_t proto_radius_acct_dict_attr[] = {
 };
 
 
-static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
+static rlm_rcode_t mod_process(UNUSED void *instance, UNUSED void *thread, REQUEST *request)
 {
 	VALUE_PAIR 	*vp;
 	rlm_rcode_t	rcode;
@@ -80,7 +81,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -110,7 +111,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		case RLM_MODULE_DISALLOW:
 		default:
 			RDEBUG("The 'recv Accounting-Request' section returned %s - not sending a response",
-			       fr_table_str_by_value(mod_rcode_table, rcode, "???"));
+			       fr_table_str_by_value(rcode_table, rcode, "???"));
 			request->reply->code = FR_CODE_DO_NOT_RESPOND;
 			goto send_reply;
 		}
@@ -124,9 +125,9 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		dv = fr_dict_enum_by_value(vp->da, &vp->data);
 		if (!dv) goto setup_send;
 
-		unlang = cf_section_find(request->server_cs, "accounting", dv->alias);
+		unlang = cf_section_find(request->server_cs, "accounting", dv->name);
 		if (!unlang) {
-			REDEBUG2("No 'accounting %s' section found: Ignoring it.", dv->alias);
+			RDEBUG2("No 'accounting %s { ... }' section found - skipping...", dv->name);
 			goto setup_send;
 		}
 
@@ -137,7 +138,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_PROCESS:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -166,7 +167,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		case RLM_MODULE_DISALLOW:
 		default:
 			RDEBUG("The 'accounting' section returned %s - not sending a response",
-			       fr_table_str_by_value(mod_rcode_table, rcode, "???"));
+			       fr_table_str_by_value(rcode_table, rcode, "???"));
 			request->reply->code = FR_CODE_DO_NOT_RESPOND;
 			goto send_reply;
 		}
@@ -180,7 +181,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 
 		dv = fr_dict_enum_by_value(attr_packet_type, fr_box_uint32(request->reply->code));
 		unlang = NULL;
-		if (dv) unlang = cf_section_find(request->server_cs, "send", dv->alias);
+		if (dv) unlang = cf_section_find(request->server_cs, "send", dv->name);
 
 		if (!unlang) goto send_reply;
 
@@ -191,7 +192,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 		/* FALL-THROUGH */
 
 	case REQUEST_SEND:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) return RLM_MODULE_HANDLED;
 
@@ -209,7 +210,7 @@ static rlm_rcode_t mod_process(UNUSED void const *instance, REQUEST *request)
 
 		default:
 			RDEBUG("The 'send Accounting-Response' section returned %s - not sending a response",
-			       fr_table_str_by_value(mod_rcode_table, rcode, "???"));
+			       fr_table_str_by_value(rcode_table, rcode, "???"));
 			request->reply->code = FR_CODE_DO_NOT_RESPOND;
 			break;
 		}

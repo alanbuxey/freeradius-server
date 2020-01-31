@@ -52,9 +52,6 @@ typedef struct module_thread_instance_s  module_thread_instance_t;
 extern "C" {
 #endif
 
-extern fr_table_num_sorted_t const mod_rcode_table[];
-extern size_t mod_rcode_table_len;
-
 /** Mappings between section names, and control attributes
  *
  * Defined in module.c.
@@ -177,7 +174,7 @@ struct rad_module_s {
 
 	module_method_t			methods[MOD_COUNT];	//!< Pointers to the various section callbacks.
 	module_method_names_t const	*method_names;		//!< named methods
-	fr_dict_t			**dict;			//!< pointer to local fr_dict_t*
+	fr_dict_t const			**dict;			//!< pointer to local fr_dict_t*
 };
 
 /** Per instance data
@@ -189,7 +186,7 @@ struct rad_module_s {
 struct module_instance_s {
 	char const			*name;		//!< Instance name e.g. user_database.
 
-	dl_module_inst_t			*dl_inst;	//!< Structure containing the module's instance data,
+	dl_module_inst_t		*dl_inst;	//!< Structure containing the module's instance data,
 							//!< configuration, and dl handle.
 
 	module_t const			*module;	//!< Public module structure.  Cached for convenience.
@@ -255,7 +252,7 @@ exfile_t	*module_exfile_init(TALLOC_CTX *ctx,
 				    bool locking,
 				    char const *trigger_prefix,
 				    VALUE_PAIR *trigger_args);
-/** @{ */
+/** @} */
 
 /** @name Helper functions
  *
@@ -271,7 +268,7 @@ bool		module_section_type_set(REQUEST *request, fr_dict_attr_t const *type_da, f
 
 int		module_instance_read_only(TALLOC_CTX *ctx, char const *name);
 
-/** @{ */
+/** @} */
 
 /** @name Module and module thread lookup
  *

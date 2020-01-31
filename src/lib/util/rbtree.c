@@ -1,7 +1,7 @@
 /*
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2.1 of the License, or
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
@@ -34,7 +34,7 @@ typedef enum {
 	RED
 } node_colour_t;
 
-struct rbnode_t {
+struct rbnode_s {
 	rbnode_t		*left;		//!< Left child
 	rbnode_t		*right;		//!< Right child
 	rbnode_t		*parent;	//!< Parent
@@ -47,7 +47,7 @@ struct rbnode_t {
 #define NIL &sentinel	   /* all leafs are sentinels */
 static rbnode_t sentinel = { NIL, NIL, NULL, BLACK, NULL};
 
-struct rbtree_t {
+struct rbtree_s {
 #ifndef NDEBUG
 	uint32_t		magic;
 #endif

@@ -1,14 +1,24 @@
 # -*- text -*-
-# Copyright (C) 2019 The FreeRADIUS Server project and contributors
+# Copyright (C) 2020 The FreeRADIUS Server project and contributors
 # This work is licensed under CC-BY version 4.0 https://creativecommons.org/licenses/by/4.0
 # Version $Id$
 ##############################################################################
 #
-#  RFC 7083 - Modification to Default Values of SOL_MAX_RT and INF_MAX_RT
+#  RFC 7078 - Distributing Address Selection Policy Using DHCPv6
 #
 #  $Id$
 #
 ##############################################################################
 
-ATTRIBUTE	SOL-Max-RT				82	uint32
-ATTRIBUTE	INF-Max-RT				83	uint32
+ATTRIBUTE	Address-Selection			84	struct
+MEMBER		Address-Selection-Flags			uint8
+MEMBER		Address-Selection-Table-Rows		group	# of Address-Selection-Table
+
+VALUE	Address-Selection-Flags		Privacy-Reference	0x01	# bit mask
+VALUE	Address-Selection-Flags		Automatic-Row-Addition	0x02	# bit mask
+
+ATTRIBUTE	Address-Selection-Table			85	struct
+MEMBER		Address-Selection-Table-Label		uint8
+MEMBER		Address-Selection-Table-Precedence	uint8
+MEMBER		Address-Selection-Table-Prefix		ipv6prefix
+

@@ -35,7 +35,7 @@ extern "C" {
  *
  *  Once spawned, workers exist until they choose to exit.
  */
-typedef struct fr_worker_t fr_worker_t;
+typedef struct fr_worker_s fr_worker_t;
 
 #ifdef __cplusplus
 }
@@ -60,17 +60,13 @@ fr_worker_t	*fr_worker_create(TALLOC_CTX *ctx, char const *name, fr_event_list_t
 
 void		fr_worker_destroy(fr_worker_t *worker) CC_HINT(nonnull);
 
-int		fr_worker_kq(fr_worker_t *worker) CC_HINT(nonnull);
-
-fr_event_list_t *fr_worker_el(fr_worker_t *worker) CC_HINT(nonnull);
-
 void		fr_worker(fr_worker_t *worker) CC_HINT(nonnull);
-
-void		fr_worker_exit(fr_worker_t *worker) CC_HINT(nonnull);
 
 void		fr_worker_debug(fr_worker_t *worker, FILE *fp) CC_HINT(nonnull);
 
-void		fr_worker_name(fr_worker_t *worker, char const *name) CC_HINT(nonnull);
+int		fr_worker_pre_event(void *uctx, fr_time_t wake);
+
+void		fr_worker_post_event(fr_event_list_t *el, fr_time_t now, void *uctx);
 
 fr_channel_t	*fr_worker_channel_create(fr_worker_t *worker, TALLOC_CTX *ctx, fr_control_t *master) CC_HINT(nonnull);
 

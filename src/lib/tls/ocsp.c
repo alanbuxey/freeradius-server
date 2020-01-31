@@ -30,6 +30,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define LOG_PREFIX "tls - ocsp - "
 
 #include <freeradius-devel/server/module.h>
+#include <freeradius-devel/server/pair.h>
 #include <freeradius-devel/server/rad_assert.h>
 
 #include <freeradius-devel/util/misc.h>
@@ -743,7 +744,7 @@ do { \
 	CONF_SECTION *_tmp; \
 	_tmp = cf_section_find(server_cs, _verb, _name); \
 	if (_tmp) { \
-		if (unlang_compile(_tmp, MOD_AUTHORIZE, NULL) < 0) return -1; \
+		if (unlang_compile(_tmp, MOD_AUTHORIZE, NULL, NULL) < 0) return -1; \
 		found = true; \
 	} \
 	if (actions) _out = _tmp; \

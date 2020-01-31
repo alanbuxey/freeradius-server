@@ -31,7 +31,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/server/map_proc.h>
 
-static fr_dict_t *dict_dhcpv4;
+static fr_dict_t const *dict_dhcpv4;
 
 extern fr_dict_autoload_t rlm_isc_dhcp_dict[];
 fr_dict_autoload_t rlm_isc_dhcp_dict[] = {
@@ -60,7 +60,7 @@ fr_dict_attr_autoload_t rlm_isc_dhcp_dict_attr[] = {
 	{ NULL }
 };
 
-typedef struct rlm_isc_dhcp_info_t rlm_isc_dhcp_info_t;
+typedef struct rlm_isc_dhcp_info_s rlm_isc_dhcp_info_t;
 
 #define NO_SEMICOLON	(0)
 #define YES_SEMICOLON	(1)
@@ -122,7 +122,7 @@ static const CONF_PARSER module_config[] = {
 /**  Holds the state of the current tokenizer
  *
  */
-typedef struct rlm_isc_dhcp_tokenizer_t {
+typedef struct {
 	rlm_isc_dhcp_t	*inst;		//!< module instance
 	FILE		*fp;
 	char const	*filename;
@@ -164,7 +164,7 @@ typedef enum rlm_isc_dhcp_type_t {
 /** Describes the commands that we accept, including it's syntax (i.e. name), etc.
  *
  */
-typedef struct rlm_isc_dhcp_cmd_t {
+typedef struct {
 	char const		*name;
 	rlm_isc_dhcp_type_t	type;
 	rlm_isc_dhcp_parse_t	parse;
@@ -180,7 +180,7 @@ typedef struct rlm_isc_dhcp_cmd_t {
  *	Since we only implement a tiny portion of it's configuration,
  *	we tend to accept all kinds of things, and then just ignore them.
  */
-struct rlm_isc_dhcp_info_t {
+struct rlm_isc_dhcp_info_s {
 	rlm_isc_dhcp_cmd_t const *cmd;
 	int			argc;
 	fr_value_box_t 		**argv;
@@ -757,7 +757,7 @@ static int parse_include(rlm_isc_dhcp_tokenizer_t *state, rlm_isc_dhcp_info_t *i
 }
 
 
-typedef struct isc_host_ether_t {
+typedef struct {
 	uint8_t			ether[6];
 	rlm_isc_dhcp_info_t	*host;
 } isc_host_ether_t;
@@ -777,7 +777,7 @@ static int host_ether_cmp(void const *one, void const *two)
 	return memcmp(a->ether, b->ether, 6);
 }
 
-typedef struct isc_host_uid_t {
+typedef struct {
 	fr_value_box_t		*client;
 	rlm_isc_dhcp_info_t	*host;
 } isc_host_uid_t;
@@ -982,7 +982,7 @@ static int parse_option_definition(rlm_isc_dhcp_info_t *parent, rlm_isc_dhcp_tok
 	 *	name/code checks above.  But doing so allows us to
 	 *	have better error messages.
 	 */
-	rcode = fr_dict_attr_add(dict_dhcpv4, root, name, box.vb_uint32, type, &flags);
+	rcode = fr_dict_attr_add(fr_dict_unconst(dict_dhcpv4), root, name, box.vb_uint32, type, &flags);
 	talloc_free(name);
 	if (rcode < 0) return rcode;
 
@@ -1010,13 +1010,7 @@ static int parse_option(rlm_isc_dhcp_info_t *parent, rlm_isc_dhcp_tokenizer_t *s
 		return -1;
 	}
 
-	vp = fr_pair_afrom_da(parent, da);
-	if (!vp) {
-		fr_strerror_printf("out of memory");
-		talloc_free(value);
-		return -1;
-	}
-
+	MEM(vp = fr_pair_afrom_da(parent, da));
 	(void) fr_pair_cursor_init(&cursor, &parent->options);
 
 	/*
@@ -1050,8 +1044,7 @@ static int parse_option(rlm_isc_dhcp_info_t *parent, rlm_isc_dhcp_tokenizer_t *s
 		rcode = read_token(state, T_DOUBLE_QUOTED_STRING, MAYBE_SEMICOLON, false);
 		if (rcode <= 0) return rcode;
 
-		vp = fr_pair_afrom_da(parent, da);
-		if (!vp) return -1;
+		MEM(vp = fr_pair_afrom_da(parent, da));
 
 		rcode = fr_pair_value_from_str(vp, state->token, state->token_len, '\0', false);
 		if (rcode < 0) return rcode;
@@ -1673,7 +1666,7 @@ static int add_option_by_da(rlm_isc_dhcp_info_t *info, fr_dict_attr_t const *da)
 
 	if (!info->parent) return -1; /* internal error */
 
-	vp = fr_pair_afrom_da(info->parent, da);
+	MEM(vp = fr_pair_afrom_da(info->parent, da));
 
 	rcode = fr_value_box_copy(vp, &(vp->data), info->argv[0]);
 	if (rcode < 0) return rcode;
@@ -1787,8 +1780,7 @@ static int apply_fixed_ip(rlm_isc_dhcp_t *inst, REQUEST *request)
 
 		if (info->cmd->type != ISC_FIXED_ADDRESS) continue;
 
-		vp = fr_pair_afrom_da(request->reply->vps, attr_your_ip_address);
-		if (!vp) return -1;
+		MEM(vp = fr_pair_afrom_da(request->reply->vps, attr_your_ip_address));
 
 		rcode = fr_value_box_copy(vp, &(vp->data), info->argv[0]);
 		if (rcode < 0) return rcode;

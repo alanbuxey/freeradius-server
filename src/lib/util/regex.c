@@ -32,6 +32,15 @@ RCSID("$Id$")
 #include <freeradius-devel/util/table.h>
 #include <freeradius-devel/util/talloc.h>
 
+#if defined(HAVE_REGEX_PCRE) || (defined(HAVE_REGEX_PCRE2) && defined(PCRE2_CONFIG_JIT))
+#ifndef FR_PCRE_JIT_STACK_MIN
+#  define FR_PCRE_JIT_STACK_MIN	(128 * 1024)
+#endif
+#ifndef FR_PCRE_JIT_STACK_MAX
+#  define FR_PCRE_JIT_STACK_MAX (512 * 1024)
+#endif
+#endif
+
 /*
  *######################################
  *#      FUNCTIONS FOR LIBPCRE2        #
@@ -64,7 +73,7 @@ typedef struct {
 /** Thread local storage for pcre2
  *
  */
-fr_thread_local_setup(fr_pcre2_tls_t *, fr_pcre2_tls)
+fr_thread_local_setup(fr_pcre2_tls_t *, fr_pcre2_tls); /* macro */
 
 /** Talloc wrapper for pcre2 memory allocation
  *
@@ -144,7 +153,7 @@ static int fr_pcre2_tls_init(void)
 #ifdef PCRE2_CONFIG_JIT
 	pcre2_config(PCRE2_CONFIG_JIT, &tls->do_jit);
 	if (tls->do_jit) {
-		tls->jit_stack = pcre2_jit_stack_create(32 * 1024, 512 * 1024, tls->gcontext);
+		tls->jit_stack = pcre2_jit_stack_create(FR_PCRE_JIT_STACK_MIN, FR_PCRE_JIT_STACK_MAX, tls->gcontext);
 		if (!tls->jit_stack) {
 			fr_strerror_printf("Failed allocating JIT stack");
 			goto error;
@@ -295,6 +304,7 @@ int regex_exec(regex_t *preg, char const *subject, size_t len, fr_regmatch_t *re
 
 	char			*our_subject = NULL;
 	bool			dup_subject = true;
+	pcre2_match_data	*match_data;
 
 	/*
 	 *	Thread local initialisation
@@ -347,18 +357,34 @@ int regex_exec(regex_t *preg, char const *subject, size_t len, fr_regmatch_t *re
 		}
 	}
 
+	/*
+	 *	If we weren't given match data we
+	 *	need to alloc it else pcre2_match
+	 *	fails when passed NULL match data.
+	 */
+	if (!regmatch) {
+		match_data = pcre2_match_data_create_from_pattern(preg->compiled, fr_pcre2_tls->gcontext);
+		if (!match_data) {
+			fr_strerror_printf("Failed allocating temporary match data");
+			return -1;
+		}
+	} else {
+		match_data = regmatch->match_data;
+	}
+
 #ifdef PCRE2_CONFIG_JIT
 	if (preg->jitd) {
 		ret = pcre2_jit_match(preg->compiled, (PCRE2_SPTR8)subject, len, 0, options,
-				      regmatch ? regmatch->match_data : NULL, fr_pcre2_tls->mcontext);
+				      match_data, fr_pcre2_tls->mcontext);
 	} else
 #endif
 	{
 		ret = pcre2_match(preg->compiled, (PCRE2_SPTR8)subject, len, 0, options,
-				  regmatch ? regmatch->match_data : NULL, fr_pcre2_tls->mcontext);
+				  match_data, fr_pcre2_tls->mcontext);
 	}
+	if (!regmatch) pcre2_match_data_free(match_data);
 	if (ret < 0) {
-		PCRE2_UCHAR errbuff[128];
+		PCRE2_UCHAR	errbuff[128];
 
 		if (dup_subject) talloc_free(our_subject);
 
@@ -620,7 +646,7 @@ fr_regmatch_t *regex_match_data_alloc(TALLOC_CTX *ctx, uint32_t count)
 #endif
 
 #ifdef HAVE_PCRE_JIT_EXEC
-fr_thread_local_setup(pcre_jit_stack *, fr_pcre_jit_stack)
+fr_thread_local_setup(pcre_jit_stack *, fr_pcre_jit_stack); /* macro */
 #endif
 
 /** Free regex_t structure
@@ -802,6 +828,19 @@ static fr_table_num_ordered_t const regex_pcre_error_str[] = {
 	{ "PCRE_ERROR_RECURSIONLIMIT",	PCRE_ERROR_RECURSIONLIMIT },
 	{ "PCRE_ERROR_NULLWSLIMIT",	PCRE_ERROR_NULLWSLIMIT },
 	{ "PCRE_ERROR_BADNEWLINE",	PCRE_ERROR_BADNEWLINE },
+	{ "PCRE_ERROR_BADOFFSET",	PCRE_ERROR_BADOFFSET },
+	{ "PCRE_ERROR_SHORTUTF8",	PCRE_ERROR_SHORTUTF8 },
+	{ "PCRE_ERROR_RECURSELOOP",	PCRE_ERROR_RECURSELOOP },
+	{ "PCRE_ERROR_JIT_STACKLIMIT",	PCRE_ERROR_JIT_STACKLIMIT },
+	{ "PCRE_ERROR_BADMODE",		PCRE_ERROR_BADMODE },
+	{ "PCRE_ERROR_BADENDIANNESS",	PCRE_ERROR_BADENDIANNESS },
+	{ "PCRE_ERROR_DFA_BADRESTART",	PCRE_ERROR_DFA_BADRESTART },
+	{ "PCRE_ERROR_JIT_BADOPTION",	PCRE_ERROR_JIT_BADOPTION },
+	{ "PCRE_ERROR_BADLENGTH",	PCRE_ERROR_BADLENGTH },
+#ifdef PCRE_ERROR_UNSET
+	{ "PCRE_ERROR_UNSET",		PCRE_ERROR_UNSET },
+#endif
+
 	{ NULL, 0 }
 };
 static size_t regex_pcre_error_str_len = NUM_ELEMENTS(regex_pcre_error_str);
@@ -838,7 +877,11 @@ int regex_exec(regex_t *preg, char const *subject, size_t len, fr_regmatch_t *re
 	 *	Allocate thread local JIT stack
 	 */
 	if (!fr_pcre_jit_stack) {
-		fr_thread_local_set_destructor(fr_pcre_jit_stack, _pcre_jit_stack_free, pcre_jit_stack_alloc(128, 512));
+		/*
+		 *	Starts at 128K, max is 512K per thread.
+		 */
+		fr_thread_local_set_destructor(fr_pcre_jit_stack, _pcre_jit_stack_free,
+					       pcre_jit_stack_alloc(FR_PCRE_JIT_STACK_MIN, FR_PCRE_JIT_STACK_MAX));
 		if (!fr_pcre_jit_stack) {
 			fr_strerror_printf("Allocating JIT stack failed");
 			return -1;

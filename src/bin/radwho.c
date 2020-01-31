@@ -112,7 +112,7 @@ static char *dotime(time_t t)
 	 *	The caller must provide the output buffer buf
 	 *	(which must be at least 26 characters long)
 	 */
-	char buff[26];
+	static char buff[26];
 	char *s = ctime_r(&t, buff);
 
 	if (showname) {
@@ -299,7 +299,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (fr_dict_global_init(autofree, config->dict_dir) < 0) {
+	if (!fr_dict_global_ctx_init(autofree, config->dict_dir)) {
 		fr_perror("%s", main_config->name);
 		exit(EXIT_FAILURE);
 	}

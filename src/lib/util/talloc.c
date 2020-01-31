@@ -26,6 +26,7 @@ RCSID("$Id$")
 #include <freeradius-devel/util/debug.h>
 #include <freeradius-devel/util/strerror.h>
 #include <freeradius-devel/util/talloc.h>
+#include <freeradius-devel/util/dlist.h>
 
 #include <string.h>
 #include <unistd.h>
@@ -107,8 +108,6 @@ static int _link_ctx_self_free(fr_talloc_link_t **link_p)
  *
  * @note This is not thread safe. Do not free parent before threads are joined, do not call from a
  *	child thread.
- * @note It's OK to free the child before threads are joined, but this will leak memory until the
- *	parent is freed.
  *
  * @param parent who's fate the child should share.
  * @param child bound to parent's lifecycle.
@@ -119,6 +118,25 @@ static int _link_ctx_self_free(fr_talloc_link_t **link_p)
 int talloc_link_ctx(TALLOC_CTX *parent, TALLOC_CTX *child)
 {
 	fr_talloc_link_t *link;
+
+	/*
+	 *	Don't link to a NULL context.
+	 */
+	if (!parent) return 0;
+
+#if 0
+	/*
+	 *	Commented out for debugging.
+	 */
+	{
+		TALLOC_CTX *check;
+
+		check = talloc_parent(child);
+		if (fr_cond_assert(parent != check)) {
+			return -1;
+		}
+	}
+#endif
 
 	link = talloc(parent, fr_talloc_link_t);
 	if (!link) return -1;
@@ -546,13 +564,16 @@ int talloc_memcmp_bstr(char const *a, char const *b)
  * This is equivalent to talloc 1.0 behaviour of talloc_free.
  *
  * @param ptr to decrement ref count for.
+ * @return
+ *	- 0	The memory was freed.
+ *	- >0	How many references remain.
  */
-void talloc_decrease_ref_count(void const *ptr)
+int talloc_decrease_ref_count(void const *ptr)
 {
 	size_t ref_count;
 	void *to_free;
 
-	if (!ptr) return;
+	if (!ptr) return 0;
 
 	memcpy(&to_free, &ptr, sizeof(to_free));
 
@@ -562,6 +583,8 @@ void talloc_decrease_ref_count(void const *ptr)
 	} else {
 		talloc_unlink(talloc_parent(ptr), to_free);
 	}
+
+	return ref_count;
 }
 
 /** Add a NULL pointer to an array of pointers
@@ -630,11 +653,72 @@ void **talloc_array_null_strip(void **array)
  *
  * @param[in] ptr	to free.
  */
-void talloc_const_free(void const *ptr)
+int talloc_const_free(void const *ptr)
 {
 	void *tmp;
-	if (!ptr) return;
+
+	if (!ptr) return 0;
 
 	memcpy(&tmp, &ptr, sizeof(tmp));
-	talloc_free(tmp);
+	return talloc_free(tmp);
+}
+
+struct talloc_child_ctx_s {
+	struct talloc_child_ctx_s *next;
+};
+
+static int _child_ctx_free(TALLOC_CHILD_CTX *list)
+{
+	while (list->next != NULL) {
+		TALLOC_CHILD_CTX *entry = list->next;
+		TALLOC_CHILD_CTX *next = entry->next;
+
+		if (talloc_free(entry) < 0) return -1;
+
+		list->next = next;
+	}
+
+	return 0;
+}
+
+/** Allocate and initialize a TALLOC_CHILD_CTX
+ *
+ *  The TALLOC_CHILD_CTX ensures ordering for allocators and
+ *  destructors.  When a TALLOC_CHILD_CTX is created, it is added to
+ *  parent, in FILO order.  In contrast, the basic talloc operations
+ *  do not guarantee any kind of order.
+ *
+ *  When the TALLOC_CHILD_CTX is freed, the children are freed in FILO
+ *  order.  That process ensures that the children are freed before
+ *  the parent, and that the younger siblings are freed before the
+ *  older siblings.
+ *
+ *  The idea is that if we have an initializer for A, which in turn
+ *  initializes B and C.  When the memory is freed, we should do the
+ *  operations in the reverse order.
+ */
+TALLOC_CHILD_CTX *talloc_child_ctx_init(TALLOC_CTX *ctx)
+{
+	TALLOC_CHILD_CTX *child;
+
+	child = talloc_zero(ctx, TALLOC_CHILD_CTX);
+	if (!child) return NULL;
+
+	talloc_set_destructor(child, _child_ctx_free);
+	return child;
+}
+
+/** Allocate a TALLOC_CHILD_CTX from a parent.
+ *
+ */
+TALLOC_CHILD_CTX *talloc_child_ctx_alloc(TALLOC_CHILD_CTX *parent)
+{
+	TALLOC_CHILD_CTX *child;
+
+	child = talloc(parent, TALLOC_CHILD_CTX);
+	if (!child) return NULL;
+
+	child->next = parent->next;
+	parent->next = child;
+	return child;
 }

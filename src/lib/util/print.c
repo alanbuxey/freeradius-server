@@ -112,7 +112,7 @@ inline size_t fr_utf8_char(uint8_t const *str, ssize_t inlen)
 	}
 
 	if ((str[0] >= 0xf1) &&		/* 6 */
-	    (str[1] <= 0xf3) &&
+	    (str[0] <= 0xf3) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
 	    (str[2] >= 0x80) &&
@@ -538,7 +538,7 @@ char *fr_vasprintf(TALLOC_CTX *ctx, char const *fmt, va_list ap)
 			char *r;
 
 			p++;
-			strtoul(p, &r, 10);
+			(void) strtoul(p, &r, 10);
 			p = r;
 		}
 

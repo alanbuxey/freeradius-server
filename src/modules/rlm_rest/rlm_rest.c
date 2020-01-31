@@ -19,7 +19,7 @@
  * @file rlm_rest.c
  * @brief Integrate FreeRADIUS with RESTfull APIs
  *
- * @copyright 2012-2018 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
+ * @copyright 2012-2019 Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  */
 RCSID("$Id$")
 
@@ -27,11 +27,14 @@ RCSID("$Id$")
 #include <freeradius-devel/server/module.h>
 #include <freeradius-devel/server/pairmove.h>
 #include <freeradius-devel/server/rad_assert.h>
+#include <freeradius-devel/tls/base.h>
 #include <freeradius-devel/unlang/base.h>
 #include <freeradius-devel/util/table.h>
 
 #include <ctype.h>
 #include "rest.h"
+
+static int instance_count;
 
 static fr_table_num_sorted_t const http_negotiation_table[] = {
 
@@ -64,6 +67,7 @@ static size_t http_negotiation_table_len = NUM_ELEMENTS(http_negotiation_table);
  */
 static CONF_PARSER tls_config[] = {
 	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, rlm_rest_section_t, tls_ca_file) },
+	{ FR_CONF_OFFSET("ca_issuer_file", FR_TYPE_FILE_INPUT, rlm_rest_section_t, tls_ca_issuer_file) },
 	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, rlm_rest_section_t, tls_ca_path) },
 	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, rlm_rest_section_t, tls_certificate_file) },
 	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, rlm_rest_section_t, tls_private_key_file) },
@@ -137,8 +141,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_rest_dict[];
 fr_dict_autoload_t rlm_rest_dict[] = {
@@ -176,17 +180,21 @@ static int rlm_rest_status_update(REQUEST *request, void *handle)
 	int		code;
 	VALUE_PAIR	*vp;
 
+	RDEBUG2("Updating result attribute(s)");
+
+	RINDENT();
 	code = rest_get_handle_code(handle);
 	if (!code) {
 		pair_delete_request(attr_rest_http_status_code);
-		RDEBUG2("&REST-HTTP-Status-Code !* ANY");
+		RDEBUG2("&request:REST-HTTP-Status-Code !* ANY");
 		return -1;
 	}
 
-	RDEBUG2("&REST-HTTP-Status-Code := %i", code);
+	RDEBUG2("&request:REST-HTTP-Status-Code := %i", code);
 
 	MEM(pair_update_request(&vp, attr_rest_http_status_code) >= 0);
 	vp->vp_uint32 = code;
+	REXDENT();
 
 	return 0;
 }
@@ -427,7 +435,7 @@ static xlat_action_t rest_xlat(TALLOC_CTX *ctx, UNUSED fr_cursor_t *out,
 	ret = rest_io_request_enqueue(t, request, handle);
 	if (ret < 0) goto error;
 
-	return unlang_xlat_yield(request, rest_xlat_resume, rest_io_xlat_action, rctx);
+	return unlang_xlat_yield(request, rest_xlat_resume, rest_io_xlat_signal, rctx);
 }
 
 static rlm_rcode_t mod_authorize_result(void *instance, void *thread, REQUEST *request, void *ctx)
@@ -999,7 +1007,7 @@ static int parse_sub_section(rlm_rest_t *inst, CONF_SECTION *parent, CONF_PARSER
 static int mod_xlat_thread_instantiate(UNUSED void *xlat_inst, void *xlat_thread_inst,
 				       UNUSED xlat_exp_t const *exp, void *uctx)
 {
-	rlm_rest_t			*inst = talloc_get_type_abort(uctx, rlm_rest_t);
+	rlm_rest_t		*inst = talloc_get_type_abort(uctx, rlm_rest_t);
 	rest_xlat_thread_inst_t	*xt = xlat_thread_inst;
 
 	xt->inst = inst;
@@ -1035,7 +1043,7 @@ static int mod_thread_instantiate(CONF_SECTION const *conf, void *instance, fr_e
 	 *	thread safe.
 	 */
 	my_conf = cf_section_dup(NULL, NULL, conf, cf_section_name1(conf), cf_section_name2(conf), true);
-	t->pool = fr_pool_init(NULL, my_conf, instance, mod_conn_create, NULL, inst->xlat_name);
+	t->pool = fr_pool_init(NULL, my_conf, instance, rest_mod_conn_create, NULL, inst->xlat_name);
 	talloc_free(my_conf);
 
 	if (!t->pool) {
@@ -1123,24 +1131,29 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	return 0;
 }
 
-/** Initialises libcurl.
+/** Initialise global curl options
  *
- * Allocates global variables and memory required for libcurl to function.
- * MUST only be called once per module instance.
- *
- * mod_unload must not be called if mod_load fails.
- *
- * @see mod_unload
- *
- * @return
- *	- 0 on success.
- *	- -1 on failure.
+ * libcurl is meant to performa reference counting, but still seems to
+ * leak lots of memory if we call curl_global_init many times.
  */
-static int mod_load(void)
+static int fr_curl_init(void)
 {
 	CURLcode ret;
-
 	curl_version_info_data *curlversion;
+
+	if (instance_count > 0) {
+		instance_count++;
+		return 0;
+	}
+
+#ifdef WITH_TLS
+	/*
+	 *	Use our OpenSSL init with the hope that
+	 *	the free function will also free the
+	 *	memory allocated during SSL init.
+	 */
+	if (tls_init() < 0) return -1;
+#endif
 
 	/* developer sanity */
 	rad_assert((NUM_ELEMENTS(http_body_type_supported)) == REST_HTTP_BODY_NUM_ENTRIES);
@@ -1159,6 +1172,39 @@ static int mod_load(void)
 
 	INFO("rlm_curl - libcurl version: %s", curl_version());
 
+	instance_count++;
+
+	return 0;
+}
+
+static void fr_curl_free(void)
+{
+	if (--instance_count > 0) return;
+
+#ifdef WITH_TLS
+	tls_free();
+#endif
+
+	curl_global_cleanup();
+}
+
+/** Initialises libcurl.
+ *
+ * Allocates global variables and memory required for libcurl to function.
+ * MUST only be called once per module instance.
+ *
+ * mod_unload must not be called if mod_load fails.
+ *
+ * @see mod_unload
+ *
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int mod_load(void)
+{
+	if (fr_curl_init() < 0) return -1;
+
 #ifdef HAVE_JSON
 	fr_json_version_print();
 #endif
@@ -1172,7 +1218,7 @@ static int mod_load(void)
  */
 static void mod_unload(void)
 {
-	curl_global_cleanup();
+	fr_curl_free();
 }
 
 /*

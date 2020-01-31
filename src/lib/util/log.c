@@ -44,7 +44,8 @@ RCSID("$Id$")
 FILE	*fr_log_fp = NULL;
 int	fr_debug_lvl = 0;
 
-fr_thread_local_setup(TALLOC_CTX *, fr_vlog_pool)
+fr_thread_local_setup(TALLOC_CTX *, fr_vlog_pool); /* macro */
+
 static uint32_t location_indent = 30;
 
 /** Canonicalize error strings, removing tabs, and generate spaces for error marker
@@ -157,6 +158,7 @@ fr_table_num_ordered_t const fr_log_levels[] = {
 	{ "Info  : ",		L_INFO		},
 	{ "Warn  : ",		L_WARN		},
 	{ "Error : ",		L_ERR		},
+	{ "Auth  : ",		L_AUTH		},
 	{ "WARN  : ",		L_DBG_WARN	},
 	{ "ERROR : ",		L_DBG_ERR	},
 	{ "WARN  : ",		L_DBG_WARN_REQ	},
@@ -341,7 +343,7 @@ int fr_vlog(fr_log_t const *log, fr_log_type_t type, char const *file, int line,
 		 *	Only print the 'facility' if we're not colourising the log messages
 		 *	and this isn't syslog.
 		 */
-		if (!log->colourise) fmt_facility = fr_table_str_by_value(fr_log_levels, type, ": ");
+		if (!log->colourise && log->print_level) fmt_facility = fr_table_str_by_value(fr_log_levels, type, ": ");
 
 		/*
 		 *	Add an additional prefix to highlight that this is a bad message
@@ -423,6 +425,10 @@ int fr_vlog(fr_log_t const *log, fr_log_type_t type, char const *file, int line,
 
 		case L_ERR:
 			syslog_priority = LOG_ERR;
+			break;
+
+		case L_AUTH:
+			syslog_priority = LOG_AUTH | LOG_INFO;
 			break;
 		}
 		syslog(syslog_priority,
@@ -742,6 +748,7 @@ int fr_log_init(fr_log_t *log, bool daemonize)
 		 */
 		dup2(devnull, STDOUT_FILENO);
 		dup2(devnull, STDERR_FILENO);
+		log->print_level = false;
 
 	} else if (fr_debug_lvl) {
 		/*

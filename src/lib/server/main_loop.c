@@ -45,7 +45,6 @@ RCSID("$Id$")
 #endif
 
 extern pid_t			radius_pid;
-static bool			just_started = true;
 static fr_event_list_t		*event_list = NULL;
 static int			self_pipe[2] = { -1, -1 };
 
@@ -187,7 +186,11 @@ void main_loop_free(void)
 
 int main_loop_start(void)
 {
-	int ret;
+	int	ret;
+
+#ifdef HAVE_SYSTEMD_WATCHDOG
+	bool	under_systemd = (getenv("NOTIFY_SOCKET") != NULL);
+#endif
 
 	if (!event_list) return 0;
 
@@ -195,7 +198,7 @@ int main_loop_start(void)
 	/*
 	 *	Tell systemd we're ready!
 	 */
-	sd_notify(0, "READY=1");
+	if (under_systemd) sd_notify(0, "READY=1");
 
 	/*
 	 *	Start placating the watchdog (if told to do so).
@@ -206,8 +209,10 @@ int main_loop_start(void)
 	ret = fr_event_loop(event_list);
 #ifdef HAVE_SYSTEMD_WATCHDOG
 	if (ret != 0x80) {	/* Not HUP */
-		INFO("Informing systemd we're stopping");
-		sd_notify(0, "STOPPING=1");
+		if (under_systemd) {
+			INFO("Informing systemd we're stopping");
+			sd_notify(0, "STOPPING=1");
+		}
 	}
 #endif
 	return ret;
@@ -215,29 +220,7 @@ int main_loop_start(void)
 
 static int _loop_status(UNUSED void *ctx, fr_time_t wake)
 {
-	/*
-	 *	Print this out right away.  If we're debugging, we
-	 *	don't really care about "Waking up..." messages when
-	 *	the server first starts up.
-	 */
-	if (just_started) {
-		INFO("Ready to process requests");
-		just_started = false;
-		return 0;
-	}
-
-	/*
-	 *	Only print out more information if we're debugging.
-	 */
-	if (!DEBUG_ENABLED) return 0;
-
-	if (!wake) {
-		if (main_config->drop_requests) return 0;
-		INFO("Ready to process requests");
-
-	} else if (wake > (NSEC / 10)) {
-		DEBUG("Waking up in %pV seconds.", fr_box_time_delta(wake));
-	}
+	if (wake > (NSEC / 10)) DEBUG3("Main loop waking up in %pV seconds", fr_box_time_delta(wake));
 
 	return 0;
 }

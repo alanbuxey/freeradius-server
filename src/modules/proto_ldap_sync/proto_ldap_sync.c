@@ -198,7 +198,7 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t proto_ldap_sync_dict[];
 fr_dict_autoload_t proto_ldap_sync_dict[] = {
@@ -250,7 +250,7 @@ static int fr_dict_enum_from_name_number(fr_dict_attr_t const *da, fr_table_num_
 
 	for (p = table; p->name; p++) {
 		value.vb_int32 = p->value;
-		if (fr_dict_enum_add_alias(da, p->name, &value, true, false) < 0) return -1;
+		if (fr_dict_enum_add_name(fr_dict_attr_unconst(da), p->name, &value, true, false) < 0) return -1;
 	}
 
 	return 0;
@@ -420,7 +420,7 @@ static void request_running(REQUEST *request, fr_state_signal_t action)
 		/* FALL-THROUGH */
 
 	case REQUEST_RECV:
-		rcode = unlang_interpret_resume(request);
+		rcode = unlang_interpret(request);
 
 		if (request->master_state == REQUEST_STOP_PROCESSING) goto done;
 
@@ -1190,7 +1190,7 @@ static int ldap_compile_section(CONF_SECTION *server_cs, char const *name1, char
 
 	cf_log_debug(cs, "Loading %s %s {...}", name1, name2);
 
-	if (unlang_compile(cs, component, NULL) < 0) {
+	if (unlang_compile(cs, component, NULL, NULL) < 0) {
 		cf_log_err(cs, "Failed compiling '%s %s { ... }' section", name1, name2);
 		return -1;
 	}

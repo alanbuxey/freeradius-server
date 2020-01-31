@@ -151,7 +151,7 @@ DIAG_OFF(missing-prototypes)
 /** Callback for LSAN - do not rename
  *
  */
-const char CC_HINT(used) *__lsan_default_suppressions(void)
+char const CC_HINT(used) *__lsan_default_suppressions(void)
 {
 	return
 #if defined(__APPLE__)
@@ -164,6 +164,16 @@ const char CC_HINT(used) *__lsan_default_suppressions(void)
 		"leak:kqueue"
 #endif
 		;
+}
+
+/** Callback for LSAN - do not rename
+ *
+ * Turn off suppressions by default as it interferes with interpreting
+ * output from some of the test utilities.
+ */
+char const CC_HINT(used) *__lsan_default_options(void)
+{
+	return "print_suppressions=0";
 }
 
 /** Callback for LSAN - do not rename
@@ -337,7 +347,11 @@ DIAG_ON(deprecated-declarations)
 		 *	a SIGKILL.
 		 */
 
-		if (_PTRACE(flags, ppid) == 0) {
+		if ((_PTRACE(flags, ppid) == 0)
+#ifdef __APPLE__
+		    || (errno == EPERM)
+#endif
+		    ) {
 			/* Wait for the parent to stop */
 			waitpid(ppid, NULL, 0);
 

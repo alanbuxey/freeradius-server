@@ -82,7 +82,7 @@ typedef struct {
 	fr_time_delta_t		zombie_period;
 } fr_io_connection_thread_t;
 
-typedef enum fr_io_connection_state_t {
+typedef enum {
 	CONN_INIT = 0,					//!< Configured but not started.
 	CONN_OPENING,					//!< Trying to connect.
 	CONN_ACTIVE,					//!< has free IDs
@@ -148,10 +148,10 @@ typedef struct {
 } fr_io_connection_t;
 
 
-typedef enum fr_io_request_state_t {
+typedef enum {
 	REQUEST_IO_STATE_INIT = 0,
-	REQUEST_IO_STATE_QUEUED,				//!< in the thread queue
-	REQUEST_IO_STATE_WRITTEN,				//!< in the connection "sent" heap
+	REQUEST_IO_STATE_QUEUED,			//!< in the thread queue
+	REQUEST_IO_STATE_WRITTEN,			//!< in the connection "sent" heap
 	REQUEST_IO_STATE_REPLIED,      			//!< timed out, or received a reply
 	REQUEST_IO_STATE_DONE,				//!< and done
 } fr_io_request_state_t;
@@ -220,7 +220,7 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_radius_udp_dict[];
 fr_dict_autoload_t rlm_radius_udp_dict[] = {
@@ -453,7 +453,7 @@ static void fd_idle(fr_io_connection_t *c)
 			       conn_error,
 			       c) < 0) {
 		PERROR("Failed inserting FD event");
-		fr_connection_signal_reconnect(c->conn);
+		fr_connection_signal_reconnect(c->conn, FR_CONNECTION_FAILED);
 	}
 }
 
@@ -482,7 +482,7 @@ static void fd_active(fr_io_connection_t *c)
 		/*
 		 *	May free the connection!
 		 */
-		fr_connection_signal_reconnect(c->conn);
+		fr_connection_signal_reconnect(c->conn, FR_CONNECTION_FAILED);
 	}
 }
 
@@ -498,18 +498,21 @@ static void conn_error(UNUSED fr_event_list_t *el, UNUSED int fd, UNUSED int fla
 	/*
 	 *	Something bad happened... Fix it...
 	 */
-	fr_connection_signal_reconnect(c->conn);
+	fr_connection_signal_reconnect(c->conn, FR_CONNECTION_FAILED);
 }
 
 
 /** Shutdown/close a file descriptor
  *
  */
-static void _conn_close(int fd, void *uctx)
+static void _conn_close(fr_event_list_t *el, void *h, void *uctx)
 {
+	int fd = *((int *)h);
 	fr_io_connection_t *c = talloc_get_type_abort(uctx, fr_io_connection_t);
 
 	if (c->idle_ev) fr_event_timer_delete(c->thread->el, &c->idle_ev);
+
+	fr_event_fd_delete(el, fd, FR_EVENT_FILTER_IO);
 
 	if (shutdown(fd, SHUT_RDWR) < 0) {
 		DEBUG3("%s - Failed shutting down connection %s: %s",
@@ -534,12 +537,14 @@ static void _conn_close(int fd, void *uctx)
 
 /** Initialise a new outbound connection
  *
- * @param[out] fd_out	Where to write the new file descriptor.
+ * @param[out] h_out	Where to write the new file descriptor.
+ * @param[in] conn	to initialise.
  * @param[in] uctx	A #fr_io_connection_thread_t.
  */
-static fr_connection_state_t _conn_init(int *fd_out, void *uctx)
+static fr_connection_state_t _conn_init(void **h_out, fr_connection_t *conn, void *uctx)
 {
 	int				fd;
+	int				*fd_s;
 	fr_io_connection_t		*c = talloc_get_type_abort(uctx, fr_io_connection_t);
 
 	/*
@@ -589,11 +594,15 @@ static fr_connection_state_t _conn_init(int *fd_out, void *uctx)
 	conn_transition(c, CONN_OPENING);
 	c->fd = fd;
 
+	fr_connection_signal_on_fd(conn, fd);
+
+	fd_s = talloc(c, int);
+	*fd_s = fd;
+	*h_out = fd_s;
+
 	// @todo - initialize the tracking memory, etc.
 	// i.e. histograms (or hyperloglog) of packets, so we can see
 	// which connections / home servers are fast / slow.
-
-	*fd_out = fd;
 
 	return FR_CONNECTION_STATE_CONNECTING;
 }
@@ -730,9 +739,15 @@ static void conn_transition(fr_io_connection_t *c, fr_io_connection_state_t stat
 		break;
 
 	case CONN_OPENING:
+		fr_dlist_remove(&c->thread->opening, c);
+		break;
+
 	case CONN_FULL:
+		fr_dlist_remove(&c->thread->full, c);
+		break;
+
 	case CONN_BLOCKED:
-		fr_dlist_remove(&c->thread->blocked, c); /* we only need 'offset' from the list */
+		fr_dlist_remove(&c->thread->blocked, c);
 		break;
 
 	case CONN_ACTIVE:
@@ -818,7 +833,7 @@ static void conn_finished_request(fr_io_connection_t *c, fr_io_request_t *u)
 // ATD END
 
 
-static int conn_timeout_init(fr_event_list_t *el, fr_io_request_t *u, fr_event_cb_t callback)
+static int conn_timeout_init(fr_event_list_t *el, fr_io_request_t *u, fr_event_timer_cb_t callback)
 {
 	u->timer.start = u->time_sent = fr_time();
 
@@ -2013,7 +2028,9 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 	}
 
 	/*
-	 *	Add Proxy-State to the tail end of the packet.
+	 *	Add Proxy-State to the tail end of the packet unless we are
+	 *	originating the request.
+	 *
 	 *	We need to add it here, and NOT in
 	 *	request->packet->vps, because multiple modules
 	 *	may be sending the packets at the same time.
@@ -2021,7 +2038,7 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 	 *	Note that the length check will always pass, due to
 	 *	the buflen manipulation done above.
 	 */
-	if (proxy_state) {
+	if (proxy_state && !c->inst->parent->originate) {
 		uint8_t		*attr = c->buffer + packet_len;
 		VALUE_PAIR	*vp;
 		vp_cursor_t	cursor;
@@ -2055,7 +2072,7 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 		attr[1] = 6;
 		memcpy(attr + 2, &c->inst->parent->proxy_state, 4);
 
-		vp = fr_pair_afrom_da(u, attr_proxy_state);
+		MEM(vp = fr_pair_afrom_da(u, attr_proxy_state));
 		fr_pair_value_memcpy(vp, attr + 2, 4, true);
 		fr_pair_add(&u->extra, vp);
 
@@ -2148,7 +2165,7 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 	if (msg) {
 		VALUE_PAIR *vp;
 
-		vp = fr_pair_afrom_da(u, attr_message_authenticator);
+		MEM(vp = fr_pair_afrom_da(u, attr_message_authenticator));
 		fr_pair_value_memcpy(vp, msg + 2, 16, true);
 		fr_pair_add(&u->extra, vp);
 
@@ -2207,10 +2224,12 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 	 *	checks.
 	 */
 	if (u != radius->status_u) {
-		if (!c->inst->parent->synchronous) {
-			RDEBUG("Proxying request.  Expecting response within %d.%06ds",
-			       u->timer.rt / USEC, u->timer.rt % USEC);
+		const char* action;
 
+		action = c->inst->parent->originate ? "Originating" : "Proxying";
+		if (!c->inst->parent->synchronous) {
+			RDEBUG("%s request.  Expecting response within %d.%06ds",
+			       action, u->timer.rt / USEC, u->timer.rt % USEC);
 		} else {
 			/*
 			 *	If the packet doesn't get a response,
@@ -2222,7 +2241,7 @@ static int conn_write(fr_io_connection_t *c, fr_io_request_t *u)
 			 *	request through a fail handler,
 			 *	instead of just freeing it.
 			 */
-			RDEBUG("Proxying request.  Relying on NAS to perform retransmissions");
+			RDEBUG("%s request.  Relying on NAS to perform retransmissions", action);
 		}
 
 		/*
@@ -2455,7 +2474,11 @@ static int status_udp_request_free(fr_io_request_t *u)
 	fr_io_connection_t	*c = u->c;
 	rlm_radius_udp_connection_t *radius = c->ctx;
 
-	DEBUG3("%s - Freeing status check ID %d on connection %s", c->module_name, u->rr->id, c->name);
+	if (u->rr) {
+		DEBUG3("%s - Freeing status check ID %d on connection %s", c->module_name, u->rr->id, c->name);
+	} else {
+		DEBUG3("%s - Freeing status check on connection %s", c->module_name, c->name);
+	}
 	radius->status_u = NULL;
 
 	/*
@@ -2477,11 +2500,11 @@ static int status_udp_request_free(fr_io_request_t *u)
 
 /** Connection failed
  *
- * @param[in] fd	of connection that failed.
+ * @param[in] h		of connection that failed.
  * @param[in] state	the connection was in when it failed.
  * @param[in] uctx	the connection.
  */
-static fr_connection_state_t _conn_failed(UNUSED int fd, fr_connection_state_t state, void *uctx)
+static fr_connection_state_t _conn_failed(UNUSED void *h, fr_connection_state_t state, void *uctx)
 {
 	fr_io_connection_t	*c = talloc_get_type_abort(uctx, fr_io_connection_t);
 
@@ -2533,8 +2556,9 @@ static fr_connection_state_t _conn_failed(UNUSED int fd, fr_connection_state_t s
 /** Process notification that fd is open
  *
  */
-static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, int fd, void *uctx)
+static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, void *h, void *uctx)
 {
+	int				fd = *((int *)h);
 	fr_io_connection_t		*c = talloc_get_type_abort(uctx, fr_io_connection_t);
 	fr_io_connection_thread_t	*t = c->thread;
 	rlm_radius_udp_connection_t	*radius = c->ctx;
@@ -2573,7 +2597,15 @@ static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, int fd, void
 
 		u = talloc_zero(c, fr_io_request_t);
 
-		request = request_alloc(u);
+		/*
+		 *	Allocate outside of the free list.
+		 *	There appears to be an issue where
+		 *	the thread destructor runs too
+		 *	early, and frees the freelist's
+		 *	head before the module destructor
+		 *      runs.
+		 */
+		request = request_local_alloc(u);
 		request->async = talloc_zero(request, fr_async_t);
 		talloc_const_free(request->name);
 		request->name = talloc_strdup(request, c->module_name);
@@ -2702,8 +2734,8 @@ static fr_connection_state_t _conn_open(UNUSED fr_event_list_t *el, int fd, void
  */
 static void conn_alloc(rlm_radius_udp_t *inst, fr_io_connection_thread_t *t)
 {
-	fr_io_connection_t	*c;
-	rlm_radius_udp_connection_t *radius;
+	fr_io_connection_t		*c;
+	rlm_radius_udp_connection_t	*radius;
 
 	c = talloc_zero(t, fr_io_connection_t);
 	c->module_name = inst->parent->name;
@@ -2748,10 +2780,17 @@ static void conn_alloc(rlm_radius_udp_t *inst, fr_io_connection_thread_t *t)
 	}
 	fr_dlist_init(&c->sent, fr_io_request_t, entry);
 
-	c->conn = fr_connection_alloc(c, t->el, t->connection_timeout, t->reconnection_delay,
-				      _conn_init,
-				      _conn_open,
-				      _conn_close,
+	c->conn = fr_connection_alloc(c, t->el,
+				      &(fr_connection_funcs_t){
+					.init = _conn_init,
+				   	.open = _conn_open,
+				   	.close = _conn_close,
+				   	.failed = _conn_failed
+				      },
+				      &(fr_connection_conf_t){
+					.connection_timeout = t->connection_timeout,
+				   	.reconnection_delay = t->reconnection_delay
+				      },
 				      c->module_name, c);
 	if (!c->conn) {
 		talloc_free(c);
@@ -2759,7 +2798,6 @@ static void conn_alloc(rlm_radius_udp_t *inst, fr_io_connection_thread_t *t)
 			   c->module_name);
 		return;
 	}
-	fr_connection_failed_func(c->conn, _conn_failed);
 
 	/*
 	 *	Enforce max_connections via atomic variables.
@@ -2835,7 +2873,6 @@ static rlm_rcode_t mod_push(void *instance, REQUEST *request, void *request_io_c
 
 	} else if (conn_timeout_init(t->el, u, response_timeout) < 0) {
 		RDEBUG("%s - Failed starting retransmit tracking", inst->parent->name);
-		talloc_free(u);
 		return RLM_MODULE_FAIL;
 	}
 

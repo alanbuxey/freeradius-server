@@ -30,7 +30,7 @@
  * @copyright 2017 Alan DeKok (aland@freeradius.org)
  */
 
-typedef struct rlm_radius_t rlm_radius_t;
+typedef struct rlm_radius_s rlm_radius_t;
 
 
 /** Push a REQUEST to an IO submodule
@@ -75,7 +75,7 @@ typedef struct {
 /*
  *	Define a structure for our module configuration.
  */
-struct rlm_radius_t {
+struct rlm_radius_s {
 	char const		*name;		//!< Module instance name.
 
 	fr_time_delta_t		connection_timeout;
@@ -86,6 +86,7 @@ struct rlm_radius_t {
 	bool			replicate;	//!< are we ignoring responses?
 	bool			synchronous;	//!< are we doing synchronous proxying?
 	bool			no_connection_fail; //!< are we failing immediately on no connection?
+	bool			originate;  //!< are we originating packets rather than proxying?
 
 	dl_module_inst_t		*io_submodule;	//!< As provided by the transport_parse
 	fr_radius_client_io_t const *io;	//!< Easy access to the IO handle

@@ -176,7 +176,7 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
+static fr_dict_t const *dict_freeradius;
 
 extern fr_dict_autoload_t rlm_logtee_dict[];
 fr_dict_autoload_t rlm_logtee_dict[] = {
@@ -219,7 +219,7 @@ static void _logtee_conn_error(UNUSED fr_event_list_t *el, int sock, UNUSED int 
 	/*
 	 *	Something bad happened... Fix it...
 	 */
-	fr_connection_signal_reconnect(t->conn);
+	fr_connection_signal_reconnect(t->conn, FR_CONNECTION_FAILED);
 }
 
 /** Drain any data we received
@@ -244,7 +244,7 @@ static void _logtee_conn_read(UNUSED fr_event_list_t *el, int sock, UNUSED int f
 		case ETIMEDOUT:
 		case EIO:
 		case ENXIO:
-			fr_connection_signal_reconnect(t->conn);
+			fr_connection_signal_reconnect(t->conn, FR_CONNECTION_FAILED);
 			return;
 
 		/*
@@ -289,7 +289,7 @@ static void _logtee_conn_writable(UNUSED fr_event_list_t *el, int sock, UNUSED i
 			case ENXIO:
 			case EPIPE:
 			case ENETDOWN:
-				fr_connection_signal_reconnect(t->conn);
+				fr_connection_signal_reconnect(t->conn, FR_CONNECTION_FAILED);
 				return;
 
 			/*
@@ -316,8 +316,10 @@ static void _logtee_conn_writable(UNUSED fr_event_list_t *el, int sock, UNUSED i
  */
 static void logtee_fd_idle(rlm_logtee_thread_t *t)
 {
-	DEBUG3("Marking socket (%i) as idle", fr_connection_get_fd(t->conn));
-	if (fr_event_fd_insert(t->conn, t->el, fr_connection_get_fd(t->conn),
+	int fd = *((int *)fr_connection_get_handle(t->conn));
+
+	DEBUG3("Marking socket (%i) as idle", fd);
+	if (fr_event_fd_insert(t->conn, t->el, fd,
 			       _logtee_conn_read,
 			       NULL,
 			       _logtee_conn_error,
@@ -334,8 +336,10 @@ static void logtee_fd_idle(rlm_logtee_thread_t *t)
  */
 static void logtee_fd_active(rlm_logtee_thread_t *t)
 {
-	DEBUG3("Marking socket (%i) as active - Draining requests", fr_connection_get_fd(t->conn));
-	if (fr_event_fd_insert(t->conn, t->el, fr_connection_get_fd(t->conn),
+	int fd = *((int *)fr_connection_get_handle(t->conn));
+
+	DEBUG3("Marking socket (%i) as active - Draining requests", fd);
+	if (fr_event_fd_insert(t->conn, t->el, fd,
 			       _logtee_conn_read,
 			       _logtee_conn_writable,
 			       _logtee_conn_error,
@@ -347,8 +351,10 @@ static void logtee_fd_active(rlm_logtee_thread_t *t)
 /** Shutdown/close a file descriptor
  *
  */
-static void _logtee_conn_close(int fd, UNUSED void *uctx)
+static void _logtee_conn_close(UNUSED fr_event_list_t *el, void *h, UNUSED void *uctx)
 {
+	int	fd = *((int *)h);
+
 	DEBUG3("Closing socket (%i)", fd);
 	if (shutdown(fd, SHUT_RDWR) < 0) DEBUG3("Shutdown on socket (%i) failed: %s", fd, fr_syserror(errno));
 	if (close(fd) < 0) DEBUG3("Closing socket (%i) failed: %s", fd, fr_syserror(errno));
@@ -357,7 +363,7 @@ static void _logtee_conn_close(int fd, UNUSED void *uctx)
 /** Process notification that fd is open
  *
  */
-static fr_connection_state_t _logtee_conn_open(UNUSED fr_event_list_t *el, UNUSED int fd, void *uctx)
+static fr_connection_state_t _logtee_conn_open(UNUSED fr_event_list_t *el, UNUSED void *h, void *uctx)
 {
 	rlm_logtee_thread_t	*t = talloc_get_type_abort(uctx, rlm_logtee_thread_t);
 
@@ -377,14 +383,16 @@ static fr_connection_state_t _logtee_conn_open(UNUSED fr_event_list_t *el, UNUSE
 
 /** Initialise a new outbound connection
  *
- * @param[out] fd_out	Where to write the new file descriptor.
+ * @param[out] h_out	Where to write the new file descriptor.
+ * @param[in] conn	being initialised.
  * @param[in] uctx	A #rlm_logtee_thread_t.
  */
-static fr_connection_state_t _logtee_conn_init(int *fd_out, void *uctx)
+static fr_connection_state_t _logtee_conn_init(void **h_out, fr_connection_t *conn, void *uctx)
 {
 	rlm_logtee_thread_t	*t = talloc_get_type_abort(uctx, rlm_logtee_thread_t);
 	rlm_logtee_t const	*inst = t->inst;
 	int			fd = -1;
+	int			*fd_s;
 
 	switch (inst->log_dst) {
 	case LOGTEE_DST_UNIX:
@@ -416,7 +424,14 @@ static fr_connection_state_t _logtee_conn_init(int *fd_out, void *uctx)
 		return FR_CONNECTION_STATE_FAILED;
 	}
 
-	*fd_out = fd;
+	/*
+	 *	Avoid pointer/integer assignments
+	 */
+	MEM(fd_s = talloc(conn, int));
+	*fd_s = fd;
+	*h_out = fd_s;
+
+	fr_connection_signal_on_fd(conn, fd);
 
 	return FR_CONNECTION_STATE_CONNECTING;
 }
@@ -560,8 +575,16 @@ static int mod_thread_instantiate(UNUSED CONF_SECTION const *conf, void *instanc
 	/*
 	 *	This opens the outbound connection
 	 */
-	t->conn = fr_connection_alloc(t, el, inst->connection_timeout, inst->reconnection_delay,
-				      _logtee_conn_init, _logtee_conn_open, _logtee_conn_close,
+	t->conn = fr_connection_alloc(t, el,
+				      &(fr_connection_funcs_t){
+					.init = _logtee_conn_init,
+				   	.open = _logtee_conn_open,
+				   	.close = _logtee_conn_close
+				      },
+				      &(fr_connection_conf_t){
+					.connection_timeout = inst->connection_timeout,
+				   	.reconnection_delay = inst->reconnection_delay
+				      },
 				      inst->name, t);
 	if (t->conn == NULL) return -1;
 

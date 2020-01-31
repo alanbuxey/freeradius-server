@@ -223,11 +223,11 @@ static xlat_action_t xlat_func_length(TALLOC_CTX *ctx, fr_cursor_t *out,
 	for (vb = fr_cursor_talloc_init(&cursor, in, fr_value_box_t);
 	     vb;
 	     vb = fr_cursor_next(&cursor)) {
-	     fr_value_box_t *new;
+		fr_value_box_t *my;
 
-		MEM(new = fr_value_box_alloc(ctx, FR_TYPE_SIZE, NULL, false));
-		new->vb_size = fr_value_box_network_length(vb);
-		fr_cursor_append(out, new);
+		MEM(my = fr_value_box_alloc(ctx, FR_TYPE_SIZE, NULL, false));
+		my->vb_size = fr_value_box_network_length(vb);
+		fr_cursor_append(out, my);
 	}
 
 	return XLAT_ACTION_DONE;
@@ -1715,12 +1715,7 @@ static ssize_t xlat_func_explode(TALLOC_CTX *ctx, char **out, size_t outlen,
 				continue;
 			}
 
-			nvp = fr_pair_afrom_da(talloc_parent(vp), vp->da);
-			if (!nvp) {
-				fr_pair_list_free(&head);
-				talloc_free(vpt);
-				return -1;
-			}
+			MEM(nvp = fr_pair_afrom_da(talloc_parent(vp), vp->da));
 			nvp->tag = vp->tag;
 
 			switch (vp->vp_type) {
@@ -2111,7 +2106,7 @@ int xlat_register(void *mod_inst, char const *name,
 		  size_t buf_len, bool async_safe)
 {
 	xlat_t	*c;
-	bool	new = false;
+	bool	is_new = false;
 
 	if (!xlat_root && (xlat_init() < 0)) return -1;;
 
@@ -2142,7 +2137,7 @@ int xlat_register(void *mod_inst, char const *name,
 		c = talloc_zero(xlat_root, xlat_t);
 		c->name = talloc_typed_strdup(c, name);
 		talloc_set_destructor(c, _xlat_func_talloc_free);
-		new = true;
+		is_new = true;
 	}
 
 	c->func.sync = func;
@@ -2156,7 +2151,7 @@ int xlat_register(void *mod_inst, char const *name,
 
 	DEBUG3("%s: %s", __FUNCTION__, c->name);
 
-	if (new && !rbtree_insert(xlat_root, c)) {
+	if (is_new && !rbtree_insert(xlat_root, c)) {
 		ERROR("Failed inserting xlat registration for %s",
 		      c->name);
 		talloc_free(c);
@@ -2180,7 +2175,7 @@ int xlat_register(void *mod_inst, char const *name,
 xlat_t const *xlat_async_register(TALLOC_CTX *ctx, char const *name, xlat_func_async_t func)
 {
 	xlat_t	*c;
-	bool	new = false;
+	bool	is_new = false;
 
 	if (!xlat_root) xlat_init();
 
@@ -2211,7 +2206,7 @@ xlat_t const *xlat_async_register(TALLOC_CTX *ctx, char const *name, xlat_func_a
 		c = talloc_zero(ctx, xlat_t);
 		c->name = talloc_typed_strdup(c, name);
 		talloc_set_destructor(c, _xlat_func_talloc_free);
-		new = true;
+		is_new = true;
 	}
 
 	c->func.async = func;
@@ -2220,7 +2215,7 @@ xlat_t const *xlat_async_register(TALLOC_CTX *ctx, char const *name, xlat_func_a
 
 	DEBUG3("%s: %s", __FUNCTION__, c->name);
 
-	if (new && !rbtree_insert(xlat_root, c)) {
+	if (is_new && !rbtree_insert(xlat_root, c)) {
 		ERROR("%s: Failed inserting xlat registration for %s", __FUNCTION__, c->name);
 		talloc_free(c);
 		return NULL;

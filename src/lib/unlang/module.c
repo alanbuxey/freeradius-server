@@ -26,9 +26,10 @@
 
 RCSID("$Id$")
 
-#include <freeradius-devel/server/module.h>
-#include <freeradius-devel/server/modpriv.h>
 #include <freeradius-devel/server/cond.h>
+#include <freeradius-devel/server/modpriv.h>
+#include <freeradius-devel/server/module.h>
+#include <freeradius-devel/server/request_data.h>
 #include <freeradius-devel/unlang/base.h>
 #include "unlang_priv.h"
 #include "module_priv.h"
@@ -402,13 +403,16 @@ REQUEST *unlang_module_subrequest_alloc(REQUEST *parent, fr_dict_t const *namesp
  *				which is why the parent isn't passed explicitly.
  * @param[in] resume		function to call when the child has finished executing.
  * @param[in] signal		function to call if a signal is received.
+ * @param[in] session		control values.  Whether we restore/store session info.
  * @param[in] rctx		to pass to the resume() and signal() callbacks.
  * @return
  *	- RLM_MODULE_YIELD.
  */
 rlm_rcode_t unlang_module_yield_to_subrequest(rlm_rcode_t *out, REQUEST *child,
 					      fr_unlang_module_resume_t resume,
-					      fr_unlang_module_signal_t signal, void *rctx)
+					      fr_unlang_module_signal_t signal,
+					      unlang_subrequest_session_t const *session,
+					      void *rctx)
 {
 	/*
 	 *	Push the resumption point BEFORE adding the subrequest
@@ -419,7 +423,7 @@ rlm_rcode_t unlang_module_yield_to_subrequest(rlm_rcode_t *out, REQUEST *child,
 	/*
 	 *	Push the subrequest and immediately run it.
 	 */
-	unlang_subrequest_push(out, child, UNLANG_SUB_FRAME);
+	unlang_subrequest_push(out, child, session, UNLANG_SUB_FRAME);
 
 	return RLM_MODULE_YIELD;
 }
@@ -504,7 +508,6 @@ rlm_rcode_t unlang_module_yield_to_section(REQUEST *request, CONF_SECTION *subcs
 	return RLM_MODULE_YIELD;
 }
 
-
 /*
  *	Lock the mutex for the module
  */
@@ -558,6 +561,9 @@ static void unlang_module_signal(REQUEST *request, fr_state_signal_t action)
 	}
 }
 
+/** Wrapper to call a module's resumption function
+ *
+ */
 static unlang_action_t unlang_module_resume(REQUEST *request, rlm_rcode_t *presult)
 {
 	unlang_stack_t			*stack = request->stack;
@@ -578,7 +584,7 @@ static unlang_action_t unlang_module_resume(REQUEST *request, rlm_rcode_t *presu
 
 	safe_lock(sp->module_instance);
 	rcode = request->rcode = state->resume(sp->module_instance->dl_inst->data,
-					    state->thread->data, request, state->rctx);
+					       state->thread->data, request, state->rctx);
 	safe_unlock(sp->module_instance);
 	request->module = caller;
 

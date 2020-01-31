@@ -110,6 +110,17 @@ VALUE_PAIR *fr_pair_afrom_da(TALLOC_CTX *ctx, fr_dict_attr_t const *da)
 	}
 
 	/*
+	 *	If we get passed an unknown da, we need to ensure that
+	 *	it's parented by "vp".
+	 */
+	if (da->flags.is_unknown) {
+		fr_dict_attr_t const *unknown;
+
+		unknown = fr_dict_unknown_acopy(vp, da);
+		da = unknown;
+	}
+
+	/*
 	 *	Use the 'da' to initialize more fields.
 	 */
 	vp->da = da;
@@ -143,11 +154,11 @@ VALUE_PAIR *fr_pair_afrom_num(TALLOC_CTX *ctx, unsigned int vendor, unsigned int
 	fr_dict_attr_t const *parent;
 
 	if (vendor == 0) {
-		da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), attr);
+		da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal()), attr);
 		goto alloc;
 	}
 
-	parent = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_VENDOR_SPECIFIC);
+	parent = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal()), FR_VENDOR_SPECIFIC);
 	if (!parent) return NULL;
 
 	parent = fr_dict_attr_child_by_num(parent, vendor);
@@ -165,7 +176,7 @@ alloc:
 		/*
 		 *	Ensure that the DA is parented by the VP.
 		 */
-		da = fr_dict_unknown_afrom_fields(ctx, fr_dict_root(fr_dict_internal), vendor, attr);
+		da = fr_dict_unknown_afrom_fields(vp, fr_dict_root(fr_dict_internal()), vendor, attr);
 		if (!da) {
 			talloc_free(vp);
 			return NULL;
@@ -201,6 +212,7 @@ alloc:
 VALUE_PAIR *fr_pair_afrom_child_num(TALLOC_CTX *ctx, fr_dict_attr_t const *parent, unsigned int attr)
 {
 	fr_dict_attr_t const *da;
+	VALUE_PAIR *vp;
 
 	da = fr_dict_attr_child_by_num(parent, attr);
 	if (!da) {
@@ -220,7 +232,9 @@ VALUE_PAIR *fr_pair_afrom_child_num(TALLOC_CTX *ctx, fr_dict_attr_t const *paren
 		if (!da) return NULL;
 	}
 
-	return fr_pair_afrom_da(ctx, da);
+	vp = fr_pair_afrom_da(ctx, da);
+	fr_dict_unknown_free(&da);
+	return vp;
 }
 
 /** Deserialise a value pair from a string
@@ -367,6 +381,18 @@ VALUE_PAIR *fr_pair_copy(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 	 */
 	if (vp->type == VT_XLAT) {
 		n->xlat = talloc_typed_strdup(n, vp->xlat);
+		return n;
+	}
+
+	/*
+	 *	Groups are special.
+	 */
+	if (n->da->type == FR_TYPE_GROUP) {
+		if (fr_pair_list_copy(n, (VALUE_PAIR **) &n->vp_ptr, vp->vp_ptr) < 0) {
+			talloc_free(n);
+			return NULL;
+		}
+
 		return n;
 	}
 
@@ -550,6 +576,11 @@ VALUE_PAIR *fr_pair_make(TALLOC_CTX *ctx, fr_dict_t const *dict, VALUE_PAIR **vp
 		return NULL;
 	}
 
+	if (da->type == FR_TYPE_GROUP) {
+		fr_strerror_printf("Attributes of type 'group' are not supported");
+		return NULL;
+	}
+
 	vp = fr_pair_afrom_da(ctx, da);
 	if (!vp) return NULL;
 	vp->op = (op == 0) ? T_OP_EQ : op;
@@ -627,13 +658,12 @@ VALUE_PAIR *fr_pair_make(TALLOC_CTX *ctx, fr_dict_t const *dict, VALUE_PAIR **vp
  */
 void fr_pair_list_free(VALUE_PAIR **vps)
 {
-	VALUE_PAIR	*vp;
-	fr_cursor_t	cursor;
+	VALUE_PAIR	*vp, *next;
 
 	if (!vps || !*vps) return;
 
-	fr_cursor_init(&cursor, vps);
-	while ((vp = fr_cursor_remove(&cursor))) {
+	for (vp = *vps; vp != NULL; vp = next) {
+		next = vp->next;
 		VP_VERIFY(vp);
 		talloc_free(vp);
 	}
@@ -765,7 +795,6 @@ void *fr_pair_iter_next_by_ancestor(void **prev, void *to_eval, void *uctx)
  */
 VALUE_PAIR *fr_pair_find_by_da(VALUE_PAIR *head, fr_dict_attr_t const *da, int8_t tag)
 {
-	fr_cursor_t 	cursor;
 	VALUE_PAIR	*vp;
 
 	/* List head may be NULL if it contains no VPs */
@@ -775,9 +804,7 @@ VALUE_PAIR *fr_pair_find_by_da(VALUE_PAIR *head, fr_dict_attr_t const *da, int8_
 
 	if (!da) return NULL;
 
-	for (vp = fr_cursor_init(&cursor, &head);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
+	for (vp = head; vp != NULL; vp = vp->next) {
 		if ((da == vp->da) && TAG_EQ(tag, vp->tag)) return vp;
 	}
 
@@ -791,7 +818,6 @@ VALUE_PAIR *fr_pair_find_by_da(VALUE_PAIR *head, fr_dict_attr_t const *da, int8_
  */
 VALUE_PAIR *fr_pair_find_by_num(VALUE_PAIR *head, unsigned int vendor, unsigned int attr, int8_t tag)
 {
-	fr_cursor_t 	cursor;
 	VALUE_PAIR	*vp;
 
 	/* List head may be NULL if it contains no VPs */
@@ -799,9 +825,7 @@ VALUE_PAIR *fr_pair_find_by_num(VALUE_PAIR *head, unsigned int vendor, unsigned 
 
 	LIST_VERIFY(head);
 
-	for (vp = fr_cursor_init(&cursor, &head);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
+	for (vp = head; vp != NULL; vp = vp->next) {
 		if (!fr_dict_attr_is_top_level(vp->da)) continue;
 
 	     	if (vendor > 0) {
@@ -824,7 +848,6 @@ VALUE_PAIR *fr_pair_find_by_num(VALUE_PAIR *head, unsigned int vendor, unsigned 
  */
 VALUE_PAIR *fr_pair_find_by_child_num(VALUE_PAIR *head, fr_dict_attr_t const *parent, unsigned int attr, int8_t tag)
 {
-	fr_cursor_t 		cursor;
 	fr_dict_attr_t const	*da;
 	VALUE_PAIR		*vp;
 
@@ -836,9 +859,7 @@ VALUE_PAIR *fr_pair_find_by_child_num(VALUE_PAIR *head, fr_dict_attr_t const *pa
 	da = fr_dict_attr_child_by_num(parent, attr);
 	if (!da) return NULL;
 
-	for (vp = fr_cursor_init(&cursor, &head);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
+	for (vp = head; vp != NULL; vp = vp->next) {
 		if ((da == vp->da) && TAG_EQ(tag, vp->tag)) return vp;
 	}
 
@@ -1271,6 +1292,12 @@ int fr_pair_list_cmp(VALUE_PAIR *a, VALUE_PAIR *b)
 		ret = (a_p->tag < b_p->tag) - (a_p->tag > b_p->tag);
 		if (ret != 0) return ret;
 
+		if (a_p->da->type == FR_TYPE_GROUP) {
+			ret = fr_pair_list_cmp(a_p->vp_ptr, b_p->vp_ptr);
+			if (ret != 0) return ret;
+			continue;
+		}
+
 		ret = fr_value_box_cmp(&a_p->data, &b_p->data);
 		if (ret != 0) {
 			(void)fr_cond_assert(ret >= -1); 	/* Comparison error */
@@ -1390,9 +1417,11 @@ void fr_pair_validate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 
 	(void) fr_strerror();	/* Clear any existing messages */
 
-	if (!fr_cond_assert(!(!filter && !list))) return;
-
 	if (!list) {
+		if (!filter) {
+			(void) fr_cond_assert(filter != NULL);
+			return;
+		}
 		fr_strerror_printf("Attribute \"%s\" not found in list", filter->da->name);
 		return;
 	}
@@ -1571,107 +1600,296 @@ mismatch:
  * @param[in] dict	to resolve attributes in.
  * @param[in] buffer	to read valuepairs from.
  * @param[in] list	where the parsed VALUE_PAIRs will be appended.
- * @return the last token parsed, or #T_INVALID
+ * @param[in,out] token	The last token we parsed
+ * @param[in] depth	the nesting depth for FR_TYPE_GROUP
+ * @return
+ *	- <= 0 on failure.
+ *	- The number of bytes of name consumed on success.
  */
-FR_TOKEN fr_pair_list_afrom_str(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *buffer, VALUE_PAIR **list)
+static ssize_t fr_pair_list_afrom_substr(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *buffer, VALUE_PAIR **list, FR_TOKEN *token, int depth)
 {
 	VALUE_PAIR	*vp, *head, **tail;
-	char const	*p;
+	char const	*p, *next;
 	FR_TOKEN	last_token = T_INVALID;
 	VALUE_PAIR_RAW	raw;
+	fr_dict_attr_t const *root = fr_dict_root(dict);
 
 	/*
 	 *	We allow an empty line.
 	 */
 	if (buffer[0] == 0) {
-		return T_EOL;
+		*token = T_EOL;
+		return 0;
 	}
 
 	head = NULL;
 	tail = &head;
 
 	p = buffer;
-	do {
-		raw.l_opand[0] = '\0';
-		raw.r_opand[0] = '\0';
+	while (true) {
+		ssize_t slen;
+		fr_dict_attr_t const *da;
+		fr_dict_attr_t *da_unknown = NULL;
 
-		last_token = fr_pair_raw_from_str(&p, &raw);
+		fr_skip_whitespace(p);
 
 		/*
-		 *	JUST a hash.  Don't try to create a VP.
-		 *	Let the caller determine if an empty list is OK.
+		 *	Stop at the end of the input, returning
+		 *	whatever token was last read.
 		 */
-		if (last_token == T_HASH) {
+		if (!*p) break;
+
+		if (*p == '#') {
 			last_token = T_EOL;
 			break;
 		}
-		if (last_token == T_INVALID) break;
 
 		/*
-		 *	Regular expressions get sanity checked by pair_make().
-		 *
-		 *	@todo - note that they will also be escaped,
-		 *	so we may need to fix that later.
+		 *	Parse the name.
 		 */
-		if ((raw.op == T_OP_REG_EQ) || (raw.op == T_OP_REG_NE)) {
-			vp = fr_pair_make(ctx, dict, NULL, raw.l_opand, raw.r_opand, raw.op);
-			if (!vp) {
-			invalid:
-				last_token = T_INVALID;
-				break;
+		slen = fr_dict_attr_by_qualified_name_substr(NULL, &da, dict, p, true);
+		if (slen <= 0) {
+
+			slen = fr_dict_unknown_afrom_oid_substr(ctx, &da_unknown, root, p);
+			if (slen <= 0) {
+				fr_strerror_printf("Invalid attribute name %s", p);
+				p += -slen;
+
+			error:
+				fr_pair_list_free(&head);
+				*token = T_INVALID;
+				return -(p - buffer);
 			}
+
+			da = da_unknown;
+		}
+
+		next = p + slen;
+
+		/*
+		 *	Allow tags if the attribute supports them.
+		 */
+		if (da->flags.has_tag && (*next == ':') && isdigit((int) next[1])) {
+			next += 2;
+			while (isdigit((int) *next)) next++;
+		}
+
+		if ((size_t) (next - p) >= sizeof(raw.l_opand)) {
+			fr_dict_unknown_free(&da);
+			fr_strerror_printf("Attribute name too long");
+			goto error;
+		}
+
+		memcpy(raw.l_opand, p, next - p);
+		raw.l_opand[next - p] = '\0';
+		raw.r_opand[0] = '\0';
+
+		p = next;
+		fr_skip_whitespace(p);
+
+		/*
+		 *	There must be an operator here.
+		 */
+		raw.op = gettoken(&p, raw.r_opand, sizeof(raw.r_opand), false);
+		if ((raw.op  < T_EQSTART) || (raw.op  > T_EQEND)) {
+			fr_dict_unknown_free(&da);
+			fr_strerror_printf("Expecting operator");
+			goto error;
+		}
+
+		fr_skip_whitespace(p);
+
+		/*
+		 *	Allow grouping attributes.
+		 */
+		if (da->type == FR_TYPE_GROUP) {
+			VALUE_PAIR *child = NULL;
+
+			if (*p != '{') {
+				fr_strerror_printf("Group list MUST start with '{'");
+				goto error;
+			}
+			p++;
+
+			vp = fr_pair_afrom_da(ctx, da);
+			if (!vp) goto error;
+
+			slen = fr_pair_list_afrom_substr(vp, dict, p, &child, &last_token, depth + 1);
+			if (slen <= 0) {
+				talloc_free(vp);
+				goto error;
+			}
+
+			if (last_token != T_RCBRACE) {
+			failed_group:
+				fr_strerror_printf("Failed to end group list with '}'");
+				talloc_free(vp);
+				goto error;
+			}
+
+			p += slen;
+			fr_skip_whitespace(p);
+			if (*p != '}') goto failed_group;
+			p++;
+			vp->vp_ptr = child;
+
 		} else {
-			/*
-			 *	All other attributes get the name
-			 *	parsed, which also includes parsing
-			 *	the tag.
-			 */
-			vp = fr_pair_make(ctx, dict, NULL, raw.l_opand, NULL, raw.op);
-			if (!vp) goto invalid;
+			FR_TOKEN quote;
+			char const *q;
 
 			/*
-			 *	We don't care what the value is, so
-			 *	ignore it.
+			 *	Free the unknown attribute, we don't need it any more.
 			 */
-			if ((raw.op == T_OP_CMP_TRUE) || (raw.op == T_OP_CMP_FALSE)) goto next;
+			fr_dict_unknown_free(&da);
+			da_unknown = NULL;
 
 			/*
-			 *	fr_pair_raw_from_str() only returns this when
-			 *	the input looks like it needs to be xlat'd.
+			 *	Get the RHS thing.
 			 */
-			if (raw.quote == T_DOUBLE_QUOTED_STRING) {
-				if (fr_pair_mark_xlat(vp, raw.r_opand) < 0) {
-					talloc_free(vp);
-					goto invalid;
+			quote = gettoken(&p, raw.r_opand, sizeof(raw.r_opand), false);
+			if (quote == T_EOL) {
+				fr_strerror_printf("Failed to get value");
+				goto error;
+			}
+
+			switch (quote) {
+				/*
+				 *	Perhaps do xlat's
+				 */
+			case T_DOUBLE_QUOTED_STRING:
+				/*
+				 *	Only report as double quoted if it contained valid
+				 *	a valid xlat expansion.
+				 */
+				q = strchr(raw.r_opand, '%');
+				if (q && (q[1] == '{')) {
+					raw.quote = quote;
+				} else {
+					raw.quote = T_SINGLE_QUOTED_STRING;
 				}
+				break;
+
+			case T_SINGLE_QUOTED_STRING:
+			case T_BACK_QUOTED_STRING:
+			case T_BARE_WORD:
+				raw.quote = quote;
+				break;
+
+			default:
+				fr_strerror_printf("Failed to find expected value on right hand side");
+				goto error;
+			}
+
+			fr_skip_whitespace(p);
+
+			/*
+			 *	Regular expressions get sanity checked by pair_make().
+			 *
+			 *	@todo - note that they will also be escaped,
+			 *	so we may need to fix that later.
+			 */
+			if ((raw.op == T_OP_REG_EQ) || (raw.op == T_OP_REG_NE)) {
+				vp = fr_pair_make(ctx, dict, NULL, raw.l_opand, raw.r_opand, raw.op);
+				if (!vp) goto error;
+			} else {
+				/*
+				 *	All other attributes get the name
+				 *	parsed, which also includes parsing
+				 *	the tag.
+				 */
+				vp = fr_pair_make(ctx, dict, NULL, raw.l_opand, NULL, raw.op);
+				if (!vp) goto error;
 
 				/*
-				 *	Parse it ourselves.  The RHS
-				 *	might NOT be tainted, but we
-				 *	don't know.  So just mark it
-				 *	as such to be safe.
+				 *	We don't care what the value is, so
+				 *	ignore it.
 				 */
-			} else if (fr_pair_value_from_str(vp, raw.r_opand, -1, '"', true) < 0) {
-				talloc_free(vp);
-				goto invalid;
+				if ((raw.op == T_OP_CMP_TRUE) || (raw.op == T_OP_CMP_FALSE)) goto next;
+
+				/*
+				 *	fr_pair_raw_from_str() only returns this when
+				 *	the input looks like it needs to be xlat'd.
+				 */
+				if (raw.quote == T_DOUBLE_QUOTED_STRING) {
+					if (fr_pair_mark_xlat(vp, raw.r_opand) < 0) {
+						talloc_free(vp);
+						goto error;
+					}
+
+					/*
+					 *	Parse it ourselves.  The RHS
+					 *	might NOT be tainted, but we
+					 *	don't know.  So just mark it
+					 *	as such to be safe.
+					 */
+				} else if (fr_pair_value_from_str(vp, raw.r_opand, -1, '"', true) < 0) {
+					talloc_free(vp);
+					goto error;
+				}
 			}
 		}
 
 	next:
+		/*
+		 *	Free the unknown attribute, we don't need it any more.
+		 */
+		fr_dict_unknown_free(&da);
+
 		*tail = vp;
 		tail = &((*tail)->next);
-	} while (*p && (last_token == T_COMMA));
 
-	if (last_token == T_INVALID) {
-		fr_pair_list_free(&head);
-	} else {
-		fr_pair_add(list, head);
+		/*
+		 *	Now look for EOL, hash, etc.
+		 */
+		if (!*p || (*p == '#')) {
+			last_token = T_EOL;
+			break;
+		}
+
+		/*
+		 *	Stop at '}', too, if we're inside of a group.
+		 */
+		if ((depth > 0) && (*p == '}')) {
+			last_token = T_RCBRACE;
+			break;
+		}
+
+		if (*p != ',') {
+			fr_strerror_printf("Unexpected input");
+			goto error;
+		}
+		p++;
+		last_token = T_COMMA;
 	}
+
+	if (head) fr_pair_add(list, head);
 
 	/*
 	 *	And return the last token which we read.
 	 */
-	return last_token;
+	*token = last_token;
+	return p - buffer;
+}
+
+/** Read one line of attribute/value pairs into a list.
+ *
+ * The line may specify multiple attributes separated by commas.
+ *
+ * @note If the function returns #T_INVALID, an error has occurred and
+ * @note the valuepair list should probably be freed.
+ *
+ * @param[in] ctx	for talloc
+ * @param[in] dict	to resolve attributes in.
+ * @param[in] buffer	to read valuepairs from.
+ * @param[in] list	where the parsed VALUE_PAIRs will be appended.
+ * @return the last token parsed, or #T_INVALID
+ */
+FR_TOKEN fr_pair_list_afrom_str(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *buffer, VALUE_PAIR **list)
+{
+	FR_TOKEN token;
+
+	(void) fr_pair_list_afrom_substr(ctx, dict, buffer, list, &token, 0);
+	return token;
 }
 
 /*
@@ -2061,6 +2279,18 @@ int fr_pair_value_from_str(VALUE_PAIR *vp, char const *value, ssize_t inlen, cha
 	type = vp->da->type;
 
 	/*
+	 *	This is not yet supported because the rest of the APIs
+	 *	to parse pair names, etc. don't yet enforce "inlen".
+	 *	This is likely not a problem in practice, but we
+	 *	haven't yet audited the uses of this function for that
+	 *	behavior.
+	 */
+	if (type == FR_TYPE_GROUP) {
+		fr_strerror_printf("Attributes of type 'group' are not yet supported");
+		return -1;
+	}
+
+	/*
 	 *	We presume that the input data is from a double quoted
 	 *	string, and needs unescaping
 	 */
@@ -2304,6 +2534,47 @@ size_t fr_pair_value_snprint(char *out, size_t outlen, VALUE_PAIR const *vp, cha
 
 	if (vp->type == VT_XLAT) return snprintf(out, outlen, "%c%s%c", quote, vp->xlat, quote);
 
+	if (vp->da->type == FR_TYPE_GROUP) {
+		VALUE_PAIR *child, *head = vp->vp_ptr;
+		fr_cursor_t cursor;
+		char *p, *end;
+		size_t len;
+
+		if (!fr_cond_assert(head != NULL)) return 0;
+
+		/*
+		 *	"{  }"
+		 */
+		if (outlen < 4) return 0;
+
+		p = out;
+		end = out + outlen - 2; /* need room for the last " }" */
+
+		*(p++) = '{';
+		*(p++) = ' ';
+
+		for (child = fr_cursor_init(&cursor, &head);
+		     child != NULL;
+		     child = fr_cursor_next(&cursor)) {
+			VP_VERIFY(child);
+
+			len = fr_pair_snprint(p, end - p, child);
+			if (len == 0) goto done;
+
+			p += len;
+			*(p++) = ',';
+			*(p++) = ' ';
+
+		}
+
+		p -= 2;		/* over-write the last ", " */
+
+	done:
+		*(p++) = ' ';
+		*(p++) = '}';
+		return p - out;
+	}
+
 	return fr_value_box_snprint(out, outlen, &vp->data, quote);
 }
 
@@ -2319,6 +2590,25 @@ char *fr_pair_value_asprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 	VP_VERIFY(vp);
 
 	if (vp->type == VT_XLAT) return fr_asprint(ctx, vp->xlat, talloc_array_length(vp->xlat) - 1, quote);
+
+	/*
+	 *	Groups are magical.
+	 */
+	if (vp->da->type == FR_TYPE_GROUP) {
+		char *tmp = talloc_array(ctx, char, 1024);
+		char *out;
+		size_t len;
+
+		len = fr_pair_value_snprint(tmp, 1024, vp, quote);
+		if (len >= 1024) {
+			talloc_free(tmp);
+			return NULL;
+		}
+
+		out = talloc_memdup(ctx, tmp, len + 1);
+		talloc_free(tmp);
+		return out;
+	}
 
 	return fr_value_box_asprint(ctx, &vp->data, quote);
 }
@@ -2360,7 +2650,7 @@ char const *fr_pair_value_enum(VALUE_PAIR const *vp, char buff[20])
 		fr_pair_value_snprint(buff, 20, vp, '\0');
 		str = buff;
 	} else {
-		str = enumv->alias;
+		str = enumv->name;
 	}
 
 	return str;
@@ -2378,10 +2668,10 @@ char *fr_pair_type_asprint(TALLOC_CTX *ctx, fr_type_t type)
 	case FR_TYPE_UINT8:
 	case FR_TYPE_UINT16:
 	case FR_TYPE_UINT32:
-	case FR_TYPE_DATE :
+	case FR_TYPE_DATE:
 		return talloc_typed_strdup(ctx, "0");
 
-	case FR_TYPE_IPV4_ADDR :
+	case FR_TYPE_IPV4_ADDR:
 		return talloc_typed_strdup(ctx, "?.?.?.?");
 
 	case FR_TYPE_IPV4_PREFIX:
@@ -2403,6 +2693,9 @@ char *fr_pair_type_asprint(TALLOC_CTX *ctx, fr_type_t type)
 	case FR_TYPE_ABINARY:
 		return talloc_typed_strdup(ctx, "??");
 #endif
+
+	case FR_TYPE_GROUP:
+		return talloc_typed_strdup(ctx, "{ ? }");
 
 	default :
 		break;
@@ -2506,7 +2799,7 @@ void fr_pair_fprint(FILE *fp, VALUE_PAIR const *vp)
  * @param[in] file where the message originated
  * @param[in] line where the message originated
  */
-void _fr_pair_list_log(fr_log_t *log, VALUE_PAIR const *vp, char const *file, int line)
+void _fr_pair_list_log(fr_log_t const *log, VALUE_PAIR const *vp, char const *file, int line)
 {
 	VALUE_PAIR *our_vp;
 	fr_cursor_t cursor;
@@ -2514,7 +2807,7 @@ void _fr_pair_list_log(fr_log_t *log, VALUE_PAIR const *vp, char const *file, in
 	memcpy(&our_vp, &vp, sizeof(vp)); /* const work-arounds */
 
 	for (vp = fr_cursor_init(&cursor, &our_vp); vp; vp = fr_cursor_next(&cursor)) {
-		fr_log(log, L_DBG, file, line, "%pP", vp);
+		fr_log(log, L_DBG, file, line, "\t%pP", vp);
 	}
 }
 
@@ -2567,181 +2860,11 @@ char *fr_pair_asprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 	return str;
 }
 
-/** Read a single valuepair from a buffer, and advance the pointer
- *
- *  Returns T_EOL if end of line was encountered.
- *
- * @param[in,out] ptr to read from and update.
- * @param[out] raw The struct to write the raw VALUE_PAIR to.
- * @return the last token read.
- */
-FR_TOKEN fr_pair_raw_from_str(char const **ptr, VALUE_PAIR_RAW *raw)
-{
-	char const	*p;
-	char *q;
-	FR_TOKEN	ret = T_INVALID, next, quote;
-	char		buf[8];
-
-	if (!ptr || !*ptr || !raw) {
-		fr_strerror_printf("Invalid arguments");
-		return T_INVALID;
-	}
-
-	/*
-	 *	Skip leading spaces
-	 */
-	p = *ptr;
-	while ((*p == ' ') || (*p == '\t')) p++;
-
-	if (!*p) {
-		fr_strerror_printf("No token read where we expected "
-				   "an attribute name");
-		return T_INVALID;
-	}
-
-	if (*p == '#') return T_HASH;
-
-	/*
-	 *	Try to get the attribute name.
-	 */
-	q = raw->l_opand;
-	*q = '\0';
-	while (*p) {
-		uint8_t const *t = (uint8_t const *) p;
-
-		if (q >= (raw->l_opand + sizeof(raw->l_opand))) {
-		too_long:
-			fr_strerror_printf("Attribute name too long");
-			return T_INVALID;
-		}
-
-		/*
-		 *	This is arguably easier than trying to figure
-		 *	out which operators come after the attribute
-		 *	name.  Yes, our "lexer" is bad.
-		 */
-		if (!fr_dict_attr_allowed_chars[(uint8_t)*t] && (*t != '.')) break;
-
-		/*
-		 *	Attribute:=value is NOT
-		 *
-		 *	Attribute:
-		 *	=
-		 *	value
-		 */
-		if ((*p == ':') && (!isdigit((int) p[1]))) break;
-
-		*(q++) = *(p++);
-	}
-
-	/*
-	 *	Haven't found any valid characters in the name.
-	 */
-	if (!*raw->l_opand) {
-		fr_strerror_printf("Invalid attribute name");
-		return T_INVALID;
-	}
-
-	/*
-	 *	Look for tag (:#).  This is different from :=, which
-	 *	is an operator.
-	 */
-	if ((*p == ':') && (isdigit((int) p[1]))) {
-		if (q >= (raw->l_opand + sizeof(raw->l_opand))) {
-			goto too_long;
-		}
-		*(q++) = *(p++);
-
-		while (isdigit((int) *p)) {
-			if (q >= (raw->l_opand + sizeof(raw->l_opand))) {
-				goto too_long;
-			}
-			*(q++) = *(p++);
-		}
-	}
-
-	*q = '\0';
-	*ptr = p;
-
-	/* Now we should have an operator here. */
-	raw->op = gettoken(ptr, buf, sizeof(buf), false);
-	if (raw->op  < T_EQSTART || raw->op  > T_EQEND) {
-		fr_strerror_printf("Expecting operator");
-
-		return T_INVALID;
-	}
-
-	/*
-	 *	Read value.  Note that empty string values are allowed
-	 */
-	quote = gettoken(ptr, raw->r_opand, sizeof(raw->r_opand), false);
-	if (quote == T_EOL) {
-		fr_strerror_printf("Failed to get value");
-
-		return T_INVALID;
-	}
-
-	/*
-	 *	Peek at the next token. Must be T_EOL, T_COMMA, or T_HASH
-	 */
-	p = *ptr;
-
-	next = gettoken(&p, buf, sizeof(buf), false);
-	switch (next) {
-	case T_HASH:
-		next = T_EOL;
-		break;
-
-	case T_EOL:
-		break;
-
-	case T_COMMA:
-		*ptr = p;
-		break;
-
-	default:
-		fr_strerror_printf("Expected end of line or comma");
-		return T_INVALID;
-	}
-	ret = next;
-
-	switch (quote) {
-	/*
-	 *	Perhaps do xlat's
-	 */
-	case T_DOUBLE_QUOTED_STRING:
-		/*
-		 *	Only report as double quoted if it contained valid
-		 *	a valid xlat expansion.
-		 */
-		p = strchr(raw->r_opand, '%');
-		if (p && (p[1] == '{')) {
-			raw->quote = quote;
-		} else {
-			raw->quote = T_SINGLE_QUOTED_STRING;
-		}
-
-		break;
-
-	case T_SINGLE_QUOTED_STRING:
-	case T_BACK_QUOTED_STRING:
-	case T_BARE_WORD:
-		raw->quote = quote;
-		break;
-
-	default:
-		fr_strerror_printf("Failed to find expected value on right hand side");
-		return T_INVALID;
-	}
-
-	return ret;
-}
-
 #ifdef WITH_VERIFY_PTR
 /*
  *	Verify a VALUE_PAIR
  */
-inline void fr_pair_verify(char const *file, int line, VALUE_PAIR const *vp)
+void fr_pair_verify(char const *file, int line, VALUE_PAIR const *vp)
 {
 	if (!vp) {
 		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR pointer was NULL", file, line);
@@ -2856,6 +2979,23 @@ inline void fr_pair_verify(char const *file, int line, VALUE_PAIR const *vp)
 			if (!fr_cond_assert(0)) fr_exit_now(1);
 		}
 		break;
+
+       case FR_TYPE_GROUP:
+	       if (!vp->vp_ptr) break;
+
+	       {
+		       fr_cursor_t cursor;
+		       VALUE_PAIR *child, *head;
+
+		       head = vp->vp_ptr;
+
+		       for (child = fr_cursor_init(&cursor, &head);
+			    child != NULL;
+			    child = fr_cursor_next(&cursor)) {
+			       fr_pair_verify(file, line, child);
+		       }
+	       }
+	       break;
 
 	default:
 		break;
@@ -2982,6 +3122,9 @@ void fr_pair_list_tainted(VALUE_PAIR *vps)
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 		VP_VERIFY(vp);
+
+		if (vp->da->type == FR_TYPE_GROUP) fr_pair_list_tainted(vp->vp_ptr);
+
 		vp->vp_tainted = true;
 	}
 }

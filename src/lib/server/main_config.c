@@ -25,15 +25,21 @@
  */
 RCSID("$Id$")
 
-#include <freeradius-devel/server/cond_eval.h>
+#include <freeradius-devel/server/cf_file.h>
+#include <freeradius-devel/server/cond.h>
+#include <freeradius-devel/server/client.h>
+#include <freeradius-devel/server/dependency.h>
 #include <freeradius-devel/server/main_config.h>
 #include <freeradius-devel/server/map_proc.h>
 #include <freeradius-devel/server/modpriv.h>
 #include <freeradius-devel/server/module.h>
 #include <freeradius-devel/server/rad_assert.h>
+#include <freeradius-devel/server/util.h>
+#include <freeradius-devel/server/virtual_servers.h>
 
 #include <freeradius-devel/util/conf.h>
 #include <freeradius-devel/util/dict.h>
+#include <freeradius-devel/util/file.h>
 
 #include <sys/stat.h>
 #include <pwd.h>
@@ -139,15 +145,6 @@ static const CONF_PARSER log_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static const CONF_PARSER thread_config[] = {
-	{ FR_CONF_OFFSET("num_networks", FR_TYPE_UINT32, main_config_t, num_networks), .dflt = STRINGIFY(1),
-	  .func = num_networks_parse },
-	{ FR_CONF_OFFSET("num_workers", FR_TYPE_UINT32, main_config_t, num_workers), .dflt = STRINGIFY(4),
-	  .func = num_workers_parse },
-
-	CONF_PARSER_TERMINATOR
-};
-
 
 static const CONF_PARSER resources[] = {
 	/*
@@ -155,9 +152,20 @@ static const CONF_PARSER resources[] = {
 	 *	the config item will *not* get printed out in debug mode, so that no one knows
 	 *	it exists.
 	 */
-	{ FR_CONF_OFFSET("talloc_pool_size", FR_TYPE_SIZE, main_config_t, talloc_pool_size), .func = talloc_pool_size_parse },			/* DO NOT SET DEFAULT */
-	{ FR_CONF_OFFSET("talloc_memory_limit", FR_TYPE_SIZE, main_config_t, talloc_memory_limit), .func = talloc_memory_limit_parse },		/* DO NOT SET DEFAULT */
-	{ FR_CONF_OFFSET("talloc_memory_report", FR_TYPE_BOOL, main_config_t, talloc_memory_report) },						/* DO NOT SET DEFAULT */
+	{ FR_CONF_OFFSET("talloc_pool_size", FR_TYPE_SIZE | FR_TYPE_HIDDEN, main_config_t, talloc_pool_size), .func = talloc_pool_size_parse },			/* DO NOT SET DEFAULT */
+	{ FR_CONF_OFFSET("talloc_memory_limit", FR_TYPE_SIZE | FR_TYPE_HIDDEN, main_config_t, talloc_memory_limit), .func = talloc_memory_limit_parse },		/* DO NOT SET DEFAULT */
+	{ FR_CONF_OFFSET("talloc_memory_report", FR_TYPE_BOOL | FR_TYPE_HIDDEN, main_config_t, talloc_memory_report) },						/* DO NOT SET DEFAULT */
+	CONF_PARSER_TERMINATOR
+};
+
+static const CONF_PARSER thread_config[] = {
+	{ FR_CONF_OFFSET("num_networks", FR_TYPE_UINT32, main_config_t, max_networks), .dflt = STRINGIFY(1),
+	  .func = num_networks_parse },
+	{ FR_CONF_OFFSET("num_workers", FR_TYPE_UINT32, main_config_t, max_workers), .dflt = STRINGIFY(4),
+	  .func = num_workers_parse },
+
+	{ FR_CONF_OFFSET("stats_interval | FR_TYPE_HIDDEN", FR_TYPE_TIME_DELTA, main_config_t, stats_interval), },
+
 	CONF_PARSER_TERMINATOR
 };
 
@@ -181,26 +189,13 @@ static const CONF_PARSER server_config[] = {
 	{ FR_CONF_OFFSET("max_request_time", FR_TYPE_TIME_DELTA, main_config_t, max_request_time), .dflt = STRINGIFY(MAX_REQUEST_TIME), .func = max_request_time_parse },
 	{ FR_CONF_OFFSET("pidfile", FR_TYPE_STRING, main_config_t, pid_file), .dflt = "${run_dir}/radiusd.pid"},
 
-	{ FR_CONF_OFFSET("debug_level", FR_TYPE_UINT32, main_config_t, debug_level), .dflt = "0" },
+	{ FR_CONF_OFFSET("debug_level", FR_TYPE_UINT32 | FR_TYPE_HIDDEN, main_config_t, debug_level), .dflt = "0" },
 
 	{ FR_CONF_POINTER("log", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) log_config },
 
 	{ FR_CONF_POINTER("resources", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) resources },
 
 	{ FR_CONF_POINTER("thread", FR_TYPE_SUBSECTION, NULL), .subcs = (void const *) thread_config, .ident2 = CF_IDENT_ANY },
-
-	/*
-	 *	People with old configs will have these.  They are listed
-	 *	AFTER the "log" section, so if they exist in radiusd.conf,
-	 *	it will prefer "log_foo = bar" to "log { foo = bar }".
-	 *	They're listed with default values of NULL, so that if they
-	 *	DON'T exist in radiusd.conf, then the previously parsed
-	 *	values for "log { foo = bar}" will be used.
-	 */
-	{ FR_CONF_DEPRECATED("log_auth", FR_TYPE_BOOL, NULL, NULL) },
-	{ FR_CONF_DEPRECATED("log_auth_badpass", FR_TYPE_BOOL, NULL, NULL) },
-	{ FR_CONF_DEPRECATED("log_auth_goodpass", FR_TYPE_BOOL, NULL, NULL ) },
-	{ FR_CONF_DEPRECATED("log_stripped_names", FR_TYPE_BOOL, NULL, NULL) },
 
 	CONF_PARSER_TERMINATOR
 };
@@ -343,42 +338,6 @@ static int max_request_time_parse(TALLOC_CTX *ctx, void *out, void *parent,
 	return 0;
 }
 
-
-static int num_networks_parse(TALLOC_CTX *ctx, void *out, void *parent,
-			      CONF_ITEM *ci, CONF_PARSER const *rule)
-{
-	int		ret;
-	uint32_t	value;
-
-	if ((ret = cf_pair_parse_value(ctx, out, parent, ci, rule)) < 0) return ret;
-
-	memcpy(&value, out, sizeof(value));
-
-	FR_INTEGER_BOUND_CHECK("thread.num_networks", value, ==, 1);
-
-	memcpy(out, &value, sizeof(value));
-
-	return 0;
-}
-
-static int num_workers_parse(TALLOC_CTX *ctx, void *out, void *parent,
-			     CONF_ITEM *ci, CONF_PARSER const *rule)
-{
-	int		ret;
-	uint32_t	value;
-
-	if ((ret = cf_pair_parse_value(ctx, out, parent, ci, rule)) < 0) return ret;
-
-	memcpy(&value, out, sizeof(value));
-
-	FR_INTEGER_BOUND_CHECK("thread.num_workers", value, >, 0);
-	FR_INTEGER_BOUND_CHECK("thread.num_workers", value, <, 64);
-
-	memcpy(out, &value, sizeof(value));
-
-	return 0;
-}
-
 static int lib_dir_parse(UNUSED TALLOC_CTX *ctx, UNUSED void *out, UNUSED void *parent,
 			 CONF_ITEM *ci, UNUSED CONF_PARSER const *rule)
 {
@@ -466,6 +425,42 @@ static int gid_parse(TALLOC_CTX *ctx, void *out, UNUSED void *parent,
 	return 0;
 }
 #endif
+
+static int num_networks_parse(TALLOC_CTX *ctx, void *out, void *parent,
+			      CONF_ITEM *ci, CONF_PARSER const *rule)
+{
+	int		ret;
+	uint32_t	value;
+
+	if ((ret = cf_pair_parse_value(ctx, out, parent, ci, rule)) < 0) return ret;
+
+	memcpy(&value, out, sizeof(value));
+
+	FR_INTEGER_BOUND_CHECK("thread.num_networks", value, ==, 1);
+
+	memcpy(out, &value, sizeof(value));
+
+	return 0;
+}
+
+static int num_workers_parse(TALLOC_CTX *ctx, void *out, void *parent,
+			     CONF_ITEM *ci, CONF_PARSER const *rule)
+{
+	int		ret;
+	uint32_t	value;
+
+	if ((ret = cf_pair_parse_value(ctx, out, parent, ci, rule)) < 0) return ret;
+
+	memcpy(&value, out, sizeof(value));
+
+	FR_INTEGER_BOUND_CHECK("thread.num_workers", value, >=, 1);
+	FR_INTEGER_BOUND_CHECK("thread.num_workers", value, <=, 64);
+
+	memcpy(out, &value, sizeof(value));
+
+	return 0;
+}
+
 
 static size_t config_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
 {
@@ -561,6 +556,21 @@ static ssize_t xlat_config(UNUSED TALLOC_CTX *ctx, char **out, size_t outlen,
 }
 
 #ifdef HAVE_SETUID
+static int mkdir_chown(int fd, char const *path, void *uctx)
+{
+	main_config_t *config = uctx;
+	int ret = 0;
+
+	if ((config->server_uid != (uid_t)-1) || (config->server_gid != (gid_t)-1)) {
+		rad_suid_up();
+		ret = fchown(fd, config->server_uid, config->server_gid);
+		if (ret < 0) fr_strerror_printf("Failed changing ownership on directory \"%s\": %s",
+						path, fr_syserror(errno));
+		rad_suid_down();
+	}
+
+	return ret;
+}
 /*
  *  Do chroot, if requested.
  *
@@ -712,8 +722,6 @@ static int switch_users(main_config_t *config, CONF_SECTION *cs)
 	 *
 	 */
 	if (config->write_pid) {
-		char *my_dir;
-
 		/*
 		 *	Control sockets may be accessible by users
 		 *	other than the freeradius user, so we need
@@ -723,29 +731,21 @@ static int switch_users(main_config_t *config, CONF_SECTION *cs)
 		 *	The freeradius user should be the only one
 		 *	allowed to write to this directory however.
 		 */
-		my_dir = talloc_typed_strdup(NULL, config->run_dir);
-		if (rad_mkdir(my_dir, 0755, config->server_uid, config->server_gid) < 0) {
-			DEBUG("Failed to create run_dir %s: %s",
-			      my_dir, fr_syserror(errno));
+		if (fr_mkdir(NULL, config->run_dir, -1, 0755, mkdir_chown, config) < 0) {
+			WARN("Failed creating run_dir %s: %s", config->run_dir, fr_syserror(errno));
 		}
-		talloc_free(my_dir);
 	}
 
 	if ((default_log.dst == L_DST_FILES) && config->log_dir) {
-		char *my_dir;
-
 		/*
 		 *	Every other Linux daemon allows 'other'
 		 *	to traverse the log directory.  That doesn't
 		 *	mean the actual files should be world
 		 *	readable.
 		 */
-		my_dir = talloc_typed_strdup(config, config->log_dir);
-		if (rad_mkdir(my_dir, 0755, config->server_uid, config->server_gid) < 0) {
-			DEBUG("Failed to create logdir %s: %s",
-			      my_dir, fr_syserror(errno));
+		if (fr_mkdir(NULL, config->log_dir, -1, 0755, mkdir_chown, config) < 0) {
+			WARN("Failed creating log_dir %s: %s", config->log_dir, fr_syserror(errno));
 		}
-		talloc_free(my_dir);
 	}
 
 	/*
@@ -833,10 +833,7 @@ void main_config_name_set_default(main_config_t *config, char const *name, bool 
 void main_config_raddb_dir_set(main_config_t *config, char const *name)
 {
 	if (config->raddb_dir) {
-		char *p;
-
-		memcpy(&p, &config->raddb_dir, sizeof(p));
-		talloc_free(p);
+		talloc_const_free(config->raddb_dir);
 		config->raddb_dir = NULL;
 	}
 	if (name) config->raddb_dir = talloc_typed_strdup(config, name);
@@ -850,10 +847,7 @@ void main_config_raddb_dir_set(main_config_t *config, char const *name)
 void main_config_dict_dir_set(main_config_t *config, char const *name)
 {
 	if (config->dict_dir) {
-		char *p;
-
-		memcpy(&p, &config->dict_dir, sizeof(p));
-		talloc_free(p);
+		talloc_const_free(config->dict_dir);
 		config->dict_dir = NULL;
 	}
 	if (name) config->dict_dir = talloc_typed_strdup(config, name);
@@ -1057,6 +1051,8 @@ do {\
 		for (ci = cf_item_next(subcs, NULL);
 		     ci != NULL;
 		     ci = cf_item_next(subcs, ci)) {
+			if (cf_item_is_data(ci)) continue;
+
 			if (!cf_item_is_pair(ci)) {
 				cf_log_err(ci, "Unexpected item in ENV section");
 				goto failure;
@@ -1103,7 +1099,7 @@ do {\
 				MEM(handle_p = talloc(NULL, void *));
 				*handle_p = handle;
 				talloc_set_destructor(handle_p, _dlhandle_free);
-				(void) cf_data_add(subcs, handle, value, true);
+				(void) cf_data_add(subcs, handle_p, value, true);
 			}
 		} /* loop over pairs in ENV */
 	} /* there's an ENV subsection */

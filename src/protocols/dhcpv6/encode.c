@@ -23,7 +23,7 @@
  * @author Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  *
  * @copyright 2018 The freeradius server project
- * @copyright 2018 NetworkRADIUS SARL (info@networkradius.com)
+ * @copyright 2018 NetworkRADIUS SARL (legal@networkradius.com)
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -31,6 +31,8 @@
 #include <freeradius-devel/util/pair.h>
 #include <freeradius-devel/util/types.h>
 #include <freeradius-devel/util/proto.h>
+#include <freeradius-devel/util/struct.h>
+#include <freeradius-devel/util/dns.h>
 #include <freeradius-devel/io/test_point.h>
 
 #include "dhcpv6.h"
@@ -48,7 +50,7 @@ static ssize_t encode_tlv_hdr(uint8_t *out, size_t outlen,
 			      fr_dict_attr_t const **tlv_stack, unsigned int depth,
 			      fr_cursor_t *cursor, void *encoder_ctx);
 
-static inline bool is_encodable(fr_dict_attr_t const *root, VALUE_PAIR *vp)
+static inline bool is_encodable(fr_dict_attr_t const *root, VALUE_PAIR const *vp)
 {
 	if (!vp) return false;
 	if (vp->da->flags.internal) return false;
@@ -134,12 +136,6 @@ static ssize_t encode_struct(uint8_t *out, size_t outlen,
 			     fr_dict_attr_t const **tlv_stack, unsigned int depth,
 			     fr_cursor_t *cursor, void *encoder_ctx)
 {
-	ssize_t			slen;
-	unsigned int		child_num = 1;
-	uint8_t			*p = out, *end = p + outlen;
-	VALUE_PAIR const	*vp = fr_cursor_current(cursor);
-	fr_dict_attr_t const	*struct_da = tlv_stack[depth];
-
 	VP_VERIFY(fr_cursor_current(cursor));
 	FR_PROTO_STACK_PRINT(tlv_stack, depth);
 
@@ -154,52 +150,7 @@ static ssize_t encode_struct(uint8_t *out, size_t outlen,
 		return PAIR_ENCODE_ERROR;
 	}
 
-	while (p < end) {
-		fr_dict_attr_t const *field_da;
-
-		FR_PROTO_STACK_PRINT(tlv_stack, depth);
-
-		/*
-		 *	The field attributes should be in order.  If
-		 *	they're not, we fill the struct with zeroes.
-		 */
-		field_da = vp->da;
-		if (field_da->attr != child_num) {
-			field_da = fr_dict_attr_child_by_num(struct_da, child_num);
-			if (!field_da) break;	/* End of the struct */
-
-			CHECK_FREESPACE(outlen, field_da->flags.length);
-
-			slen = field_da->flags.length;
-			memset(p, 0, slen);
-			p += slen;
-			child_num++;
-			continue;
-		}
-
-		slen = encode_value(p, outlen, tlv_stack, depth + 1, cursor, encoder_ctx);
-		if (slen < 0) return slen;
-
-		p += slen;
-		child_num++;
-
-		/*
-		 *	If nothing updated the attribute, stop
-		 */
-		if (!fr_cursor_current(cursor) || (vp == fr_cursor_current(cursor))) break;
-
-		/*
-		 *	We can encode multiple struct members if
-		 *	after rebuilding the TLV Stack, the attribute
-		 *	at this depth is the same.
-		 */
-		if (struct_da != tlv_stack[depth]) break;
-		vp = fr_cursor_current(cursor);
-
-		FR_PROTO_HEX_DUMP(out, p - out, "Done STRUCT");
-	}
-
-	return p - out;
+	return fr_struct_to_network(out, outlen, tlv_stack, depth, cursor, encoder_ctx, encode_value);
 }
 
 static ssize_t encode_value(uint8_t *out, size_t outlen,
@@ -218,10 +169,22 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	 *	Pack multiple attributes into into a single option
 	 */
 	if (da->type == FR_TYPE_STRUCT) {
+		fr_dhcpv6_encode_ctx_t	*packet_ctx = encoder_ctx;
+
 		slen = encode_struct(out, outlen, tlv_stack, depth, cursor, encoder_ctx);
 		if (slen < 0) return slen;
 
-		vp = next_encodable(cursor, encoder_ctx);
+		/*
+		 *	The encode_struct() routine eats all relevant
+		 *	VPs.  It stops when the cursor is pointing to
+		 *	a VP which is *not* part of the struct.  As a
+		 *	result, we shouldn't call next_encodable()
+		 *	here unless the next VP isn't encodable.
+		 */
+		vp = fr_cursor_current(cursor);
+		if (!is_encodable(packet_ctx->root, vp)) {
+			vp = next_encodable(cursor, packet_ctx);
+		}
 		fr_proto_tlv_stack_build(tlv_stack, vp ? vp->da : NULL);
 		return slen;
 	}
@@ -262,8 +225,40 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	 *   |                              ...                              |
 	 *   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	 */
-	case FR_TYPE_OCTETS:
 	case FR_TYPE_STRING:
+		/*
+		 *	DNS labels get a special encoder.  DNS labels
+		 *	MUST NOT be compressed in DHCP.
+		 *
+		 *	https://tools.ietf.org/html/rfc8415#section-10
+		 */
+		if (!da->flags.extra &&
+		    ((da->flags.subtype == FLAG_ENCODE_DNS_LABEL) ||
+		     (da->flags.subtype == FLAG_ENCODE_PARTIAL_DNS_LABEL))) {
+			slen = fr_dns_label_from_value_box(NULL, p, outlen, p, false, &vp->data);
+
+			/*
+			 *	@todo - check for free space, etc.
+			 */
+			if (slen <= 0) return PAIR_ENCODE_ERROR;
+
+			/*
+			 *	RFC 4704 says "FQDN", unless it's a
+			 *	single label, in which case it's a
+			 *	partial name, and we omit the trailing
+			 *	zero.
+			 */
+			if ((da->flags.subtype == FLAG_ENCODE_PARTIAL_DNS_LABEL) &&
+			    (*(p + p[0] + 1) == 0)) {
+				slen--;
+			}
+
+			p += slen;
+			break;
+		}
+		/* FALL-THROUGH */
+
+	case FR_TYPE_OCTETS:
 		/*
 		 *	If asked to encode more data than allowed,
 		 *	we encode only the allowed data.
@@ -275,7 +270,7 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 			memcpy(p, vp->vp_ptr, vp->vp_length);
 			memset(p + vp->vp_length, 0, slen - vp->vp_length);
 		} else {
-			memcpy(p, vp->vp_ptr, vp->vp_length);
+			memcpy(p, vp->vp_ptr, slen);
 		}
 		p += slen;
 		break;
@@ -395,6 +390,7 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	case FR_TYPE_IPV4_ADDR:
 	case FR_TYPE_IFID:
 	case FR_TYPE_ETHERNET:
+	case FR_TYPE_TIME_DELTA:
 		CHECK_FREESPACE(outlen, fr_dhcpv6_option_len(vp));
 		slen = fr_value_box_to_network(NULL, p, end - p, &vp->data);
 		if (slen < 0) return PAIR_ENCODE_ERROR;
@@ -405,27 +401,52 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	 *	A standard 32bit integer, but unlike normal UNIX timestamps
 	 *	starts from the 1st of January 2000.
 	 *
-	 *	In the decoder we add 946,080,000 seconds (30 years) to any
-	 *	values, so here we need to subtract 946,080,000 seconds, or
-	 *	if the value is less than 946,080,000 seconds, just encode
-	 *	a 0x0000000000 value.
+	 *	In the decoder we add 30 years to any values, so here
+	 *	we need to subtract that time, or if the value is less
+	 *	than that time, just encode a 0x0000000000
+	 *	value.
 	 */
 	case FR_TYPE_DATE:
 	{
 		uint32_t adj_date;
-		fr_time_t date = fr_time_to_sec(vp->vp_date);
+		uint64_t date = fr_time_to_sec(vp->vp_date);
 
 		CHECK_FREESPACE(outlen, fr_dhcpv6_option_len(vp));
-
-		if (date < 946080000) {	/* 30 years */
+		if (date < DHCPV6_DATE_OFFSET) {	/* 30 years */
 			memset(p, 0, sizeof(uint32_t));
 			p += sizeof(uint32_t);
 			break;
 		}
 
-		adj_date = htonl(date - 946080000);
+		adj_date = htonl(date - DHCPV6_DATE_OFFSET);
 		memcpy(p, &adj_date, sizeof(adj_date));
 		p += sizeof(adj_date);
+	}
+		break;
+
+	case FR_TYPE_GROUP:
+	{
+		VALUE_PAIR *child;
+		fr_cursor_t child_cursor;
+
+		/*
+		 *	Encode the child options.
+		 */
+		child = vp->vp_ptr;
+		if (child) {
+			(void) fr_cursor_init(&child_cursor, &child);
+
+			while (fr_cursor_current(&child_cursor) != NULL) {
+				child = fr_cursor_current(&child_cursor);
+				slen = fr_dhcpv6_encode_option(p, end - p, &child_cursor, encoder_ctx);
+				if (slen == PAIR_ENCODE_SKIP) continue;
+
+				if (slen < 0) return PAIR_ENCODE_ERROR;
+				if (slen == 0) break;
+
+				p += slen;
+			}
+		}
 	}
 		break;
 
@@ -438,14 +459,13 @@ static ssize_t encode_value(uint8_t *out, size_t outlen,
 	case FR_TYPE_TLV:
 	case FR_TYPE_STRUCT:
 	case FR_TYPE_SIZE:
-	case FR_TYPE_TIME_DELTA:
 	case FR_TYPE_ABINARY:
 	case FR_TYPE_FLOAT32:
 	case FR_TYPE_FLOAT64:
-	case FR_TYPE_GROUP:
 	case FR_TYPE_VALUE_BOX:
 	case FR_TYPE_MAX:
-		fr_strerror_printf("Unsupported attribute type %d", da->type);
+		fr_strerror_printf("Unsupported attribute type %s",
+				   fr_table_str_by_value(fr_value_box_type_table, da->type, "?Unknown?"));
 		return PAIR_ENCODE_ERROR;
 	}
 
@@ -465,15 +485,40 @@ static inline ssize_t encode_array(uint8_t *out, size_t outlen,
 	uint8_t			*p = out, *end = p + outlen;
 	ssize_t			slen;
 	size_t			element_len;
+	VALUE_PAIR		*vp;
 	fr_dict_attr_t const	*da = tlv_stack[depth];
 
 	if (!fr_cond_assert_msg(da->flags.array,
 				"%s: Internal sanity check failed, attribute \"%s\" does not have array bit set",
 				__FUNCTION__, da->name)) return PAIR_ENCODE_ERROR;
 
+	/*
+	 *	DNS labels have internalized length, so we don't need
+	 *	length headers.
+	 */
+	if ((da->type == FR_TYPE_STRING) && !da->flags.extra && da->flags.subtype){
+		while (p < end) {
+			vp = fr_cursor_current(cursor);
+
+			/*
+			 *	DNS labels get a special encoder.  DNS labels
+			 *	MUST NOT be compressed in DHCP.
+			 *
+			 *	https://tools.ietf.org/html/rfc8415#section-10
+			 */
+			slen = fr_dns_label_from_value_box(NULL, out, outlen, p, false, &vp->data);
+			if (slen <= 0) return PAIR_ENCODE_ERROR;
+
+			p += slen;
+			vp = next_encodable(cursor, encoder_ctx);
+			if (!vp || (vp->da != da)) break;		/* Stop if we have an attribute of a different type */
+		}
+
+		return p - out;
+	}
+
 	while (p < end) {
 		uint16_t 	*len_field = NULL;	/* GCC is dumb */
-		VALUE_PAIR	*vp;
 
 		element_len = fr_dhcpv6_option_len(fr_cursor_current(cursor));
 
@@ -513,8 +558,8 @@ static inline ssize_t encode_array(uint8_t *out, size_t outlen,
 		/*
 		 *	Populate the length field
 		 */
-		if (!da->flags.length) *len_field = htons((uint16_t) slen);
-
+		if (len_field) *len_field = htons((uint16_t) slen);
+		
 		vp = fr_cursor_current(cursor);
 		if (!vp || (vp->da != da)) break;		/* Stop if we have an attribute of a different type */
 	}
@@ -662,148 +707,6 @@ static ssize_t encode_tlv_hdr(uint8_t *out, size_t outlen,
 	return p - out;
 }
 
-/** Encode a VSIO (Vendor Specific Information Opion)
- *
- * If it's in the RFC format, call encode_rfc_hdr.  Otherwise, encode it here.
- * This allows variable length vendor options.  There is no specific format
- * specified for vendor option data, so we need to allow for variable width
- * option fields and length field widths.
- *
- *     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
- *     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- *     .                                                               .
- *     .                          option-data                          .
- *     .                                                               .
- *     +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
- */
-static ssize_t encode_vsio_suboption_hdr(uint8_t *out, size_t outlen,
-					 fr_dict_attr_t const **tlv_stack, unsigned int depth,
-					 fr_cursor_t *cursor, void *encoder_ctx)
-{
-	ssize_t			slen;
-	uint8_t			*p = out, *end = p + outlen, *len_field = NULL;		/* GCC is dumb */
-	size_t			hdr_len;
-	fr_dict_attr_t const	*da, *dv;
-
-	FR_PROTO_STACK_PRINT(tlv_stack, depth);
-
-	/*
-	 *	This is the dictionary attribute which contains the
-	 *	vendor IANA ID.
-	 */
-	dv = tlv_stack[depth++];
-	if (dv->type != FR_TYPE_VENDOR) {
-		fr_strerror_printf("Expected Vendor");
-		return PAIR_ENCODE_ERROR;
-	}
-
-	da = tlv_stack[depth];
-
-	/*
-	 *	If the option field size is 1 byte, we can just
-	 *	encode it as a standard option header.
-	 */
-	if ((da->type != FR_TYPE_TLV) &&
-	    (dv->flags.type_size == 1) &&
-	    (dv->flags.length == 1)) return encode_rfc_hdr(out, outlen, tlv_stack, depth, cursor, encoder_ctx);
-
-	hdr_len = dv->flags.type_size + dv->flags.length;
-	CHECK_FREESPACE(end - p, hdr_len);
-
-	/*
-	 *	Vendors use different widths for their option
-	 *	number fields.
-	 */
-	switch (dv->flags.type_size) {
-	default:
-		fr_strerror_printf("%s: Internal sanity check failed, type %u", __FUNCTION__,
-				   (unsigned) dv->flags.type_size);
-		return PAIR_ENCODE_ERROR;
-
-	case 4:	/* 32bit */
-		*p++ = (da->attr >> 24) & 0xff;
-		*p++ = (da->attr >> 16) & 0xff;
-		*p++ = (da->attr >> 8) & 0xff;
-		*p++ = (da->attr & 0xff);
-		break;
-
-	case 3: /* 24bit */
-		*p++ = (da->attr >> 16) & 0xff;
-		*p++ = (da->attr >> 8) & 0xff;
-		*p++ = (da->attr & 0xff);
-		break;
-
-	case 2: /* 16bit */
-		*p++ = (da->attr >> 8) & 0xff;
-		*p++ = (da->attr & 0xff);
-		break;
-
-	case 1: /* 8 bit */
-		*p++ = (da->attr & 0xff);
-		break;
-	}
-
-	switch (dv->flags.length) {
-	default:
-		fr_strerror_printf("%s: Internal sanity check failed, length %u",
-				   __FUNCTION__, (unsigned) dv->flags.length);
-		return PAIR_ENCODE_ERROR;
-
-	case 0:	/* No length field ??? */
-		break;
-
-	case 2:	/* 16bit length field */
-		len_field = p;
-		p += sizeof(uint16_t);
-		break;
-
-	case 1: /* 8bit length field */
-		len_field = p;
-		p += sizeof(uint8_t);
-		break;
-	}
-
-	/*
-	 *	Because we've now encoded the attribute header,
-	 *	if this is a TLV, we must process it via the
-	 *	internal tlv function, else we get a double TLV header.
-	 */
-	if (da->type == FR_TYPE_TLV) {
-		slen = encode_tlv(p, end - p, tlv_stack, depth, cursor, encoder_ctx);
-	/*
-	 *	Array of values inside a vendor option
-	 */
-	} else if (da->flags.array) {
-		slen = encode_array(p, end - p, tlv_stack, depth, cursor, encoder_ctx);
-	/*
-	 *	Normal vendor option
-	 */
-	} else {
-		slen = encode_value(p, end - p, tlv_stack, depth, cursor, encoder_ctx);
-	}
-	if (slen < 0) return slen;
-	p += slen;
-
-	switch (dv->flags.length) {
-	default:
-		break;
-
-	case 2:
-		len_field[0] = ((end - p) >> 8) & 0xff;
-		len_field[1] = (end - p) & 0xff;
-		break;
-
-	case 1:
-		len_field[0] = (end - p) & 0xff;
-		break;
-	}
-
-#ifndef NDEBUG
-	FR_PROTO_HEX_DUMP(out, end - p, "Done VSIO body");
-#endif
-
-	return p - out;
-}
 
 /** Encode a Vendor-Specific Information Option
  *
@@ -826,6 +729,7 @@ static ssize_t encode_vsio_hdr(uint8_t *out, size_t outlen,
 	uint32_t		pen;
 	uint8_t			*p = out, *end = p + outlen;
 	fr_dict_attr_t const	*da = tlv_stack[depth];
+	fr_dict_attr_t const	*dv;
 
 	FR_PROTO_STACK_PRINT(tlv_stack, depth);
 
@@ -847,12 +751,12 @@ static ssize_t encode_vsio_hdr(uint8_t *out, size_t outlen,
 	/*
 	 *	Now process the vendor ID part (which is one attribute deeper)
 	 */
-	da = tlv_stack[++depth];
+	dv = tlv_stack[++depth];
 	FR_PROTO_STACK_PRINT(tlv_stack, depth);
 
-	if (da->type != FR_TYPE_VENDOR) {
+	if (dv->type != FR_TYPE_VENDOR) {
 		fr_strerror_printf("%s: Expected type \"vsa\" got \"%s\"", __FUNCTION__,
-				   fr_table_str_by_value(fr_value_box_type_table, da->type, "?Unknown?"));
+				   fr_table_str_by_value(fr_value_box_type_table, dv->type, "?Unknown?"));
 		return PAIR_ENCODE_ERROR;
 	}
 
@@ -860,22 +764,50 @@ static ssize_t encode_vsio_hdr(uint8_t *out, size_t outlen,
 	 *	Copy in the 32bit PEN (Private Enterprise Number)
 	 */
 	p += OPT_HDR_LEN;
-	pen = htonl(da->attr);
+	pen = htonl(dv->attr);
 	memcpy(p, &pen, sizeof(pen));
+	p += 4;
 
 	/*
-	 *	Encode the vendor specific option header
-	 *	i.e. OPTION_VENDOR_OPTS and whatever the length of the vendor
-	 *	specific attribute was.
+	 *	https://tools.ietf.org/html/rfc8415#section-21.17 says:
+	 *
+	 *   The vendor-option-data field MUST be encoded as a sequence of
+	 *   code/length/value fields of format identical to the DHCP options (see
+	 *   Section 21.1).  The sub-option codes are defined by the vendor
+	 *   identified in the enterprise-number field and are not managed by
+	 *   IANA.  Each of the sub-options is formatted as follows:
+	 *
+	 *       0                   1                   2                   3
+	 *       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+	 *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	 *      |          sub-opt-code         |         sub-option-len        |
+	 *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+	 *      .                                                               .
+	 *      .                        sub-option-data                        .
+	 *      .                                                               .
+	 *      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	 */
-	slen = encode_vsio_suboption_hdr(p, end - p, tlv_stack, depth, cursor, encoder_ctx);
+
+	/*
+	 *	Encode the different data types
+	 */
+	if (da->type == FR_TYPE_TLV) {
+		slen = encode_tlv_hdr(p, end - p, tlv_stack, depth + 1, cursor, encoder_ctx);
+
+	} else {
+		/*
+		 *	Normal vendor option
+		 */
+		slen = encode_rfc_hdr(p, end - p, tlv_stack, depth + 1, cursor, encoder_ctx);
+	}
+
 	if (slen < 0) return slen;
 	p += slen;
 
-	encode_option_hdr(out, outlen, da->attr, p - out);
+	encode_option_hdr(out, outlen, da->attr, p - (out + 4));
 
 #ifndef NDEBUG
-	FR_PROTO_HEX_DUMP(out, end - p, "Done VSIO header");
+	FR_PROTO_HEX_DUMP(out, p - out, "Done VSIO header");
 #endif
 
 	return p - out;
@@ -966,11 +898,24 @@ static int encode_test_ctx(void **out, TALLOC_CTX *ctx)
 	return 0;
 }
 
+static ssize_t fr_dhcpv6_encode_proto(UNUSED TALLOC_CTX *ctx, VALUE_PAIR *vps, uint8_t *data, size_t data_len, UNUSED void *proto_ctx)
+{
+//	fr_dhcpv6_decode_ctx_t	*test_ctx = talloc_get_type_abort(proto_ctx, fr_dhcpv6_decode_ctx_t);
+
+	return fr_dhcpv6_encode(data, data_len, NULL, 0, vps);
+}
+
 /*
  *	Test points
  */
-extern fr_test_point_pair_encode_t dhcpv6_tp_encode;
-fr_test_point_pair_encode_t dhcpv6_tp_encode = {
+extern fr_test_point_pair_encode_t dhcpv6_tp_encode_pair;
+fr_test_point_pair_encode_t dhcpv6_tp_encode_pair = {
 	.test_ctx	= encode_test_ctx,
 	.func		= fr_dhcpv6_encode_option
+};
+
+extern fr_test_point_proto_encode_t dhcpv6_tp_encode_proto;
+fr_test_point_proto_encode_t dhcpv6_tp_encode_proto = {
+	.test_ctx	= encode_test_ctx,
+	.func		= fr_dhcpv6_encode_proto
 };

@@ -79,7 +79,7 @@ static CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_rediswho_dict[];
 fr_dict_autoload_t rlm_rediswho_dict[] = {
@@ -217,9 +217,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED void *
 		return RLM_MODULE_NOOP;
 	}
 
-	cs = cf_section_find(inst->cs, dv->alias, NULL);
+	cs = cf_section_find(inst->cs, dv->name, NULL);
 	if (!cs) {
-		RDEBUG2("No subsection %s", dv->alias);
+		RDEBUG2("No subsection %s", dv->name);
 		return RLM_MODULE_NOOP;
 	}
 

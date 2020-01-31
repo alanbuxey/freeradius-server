@@ -45,8 +45,8 @@ static int instance_count = 0;
  */
 _Thread_local TALLOC_CTX 	*ssl_talloc_ctx;
 
-fr_dict_t			*dict_freeradius;
-fr_dict_t			*dict_radius;
+fr_dict_t const *dict_freeradius;
+fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t tls_dict[];
 fr_dict_autoload_t tls_dict[] = {
@@ -424,14 +424,24 @@ static void *openssl_realloc(void *old, size_t len)
  * @param to_free memory to free.
  */
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L
+#ifdef NDEBUG
+/*
+ *	If we're not debugging, use only the filename.  Otherwise the
+ *	cost of snprintf() is too large.
+ */
+static void openssl_free(void *to_free, char const *file, UNUSED int line)
+{
+	(void)_talloc_free(to_free, file);
+}
+#else
 static void openssl_free(void *to_free, char const *file, int line)
 {
 	char buffer[256];
 
 	snprintf(buffer, sizeof(buffer), "%s:%i", file, line);
-
 	(void)_talloc_free(to_free, buffer);
 }
+#endif
 #else
 static void openssl_free(void *to_free)
 {

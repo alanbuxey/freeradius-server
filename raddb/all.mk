@@ -1,7 +1,7 @@
 #
 #  The list of files to install.
 #
-LOCAL_FILES :=		clients.conf dictionary templates.conf experimental.conf \
+LOCAL_FILES :=		clients.conf dictionary experimental.conf \
 			radiusd.conf trigger.conf panic.gdb
 
 DEFAULT_SITES :=	default inner-tunnel
@@ -53,23 +53,23 @@ LEGACY_LINKS :=		$(addprefix $(R)$(raddbdir)/,users)
 
 BUILD_RADDB := $(strip $(foreach x,install clean,$(findstring $(x),$(MAKECMDGOALS))))
 ifneq "$(BUILD_RADDB)" ""
-RADDB_DIRS :=		certs mods-available mods-enabled policy.d \
+RADDB_DIRS :=		certs mods-available mods-enabled policy.d template.d \
 			sites-available sites-enabled \
-			$(patsubst raddb/%,%,$(shell find raddb/mods-config -type d -print))
+			$(patsubst raddb/%,%,$(call FIND_DIRS,raddb/mods-config))
 
 # Installed directories
-INSTALL_RADDB_DIRS :=	$(R)$(raddbdir)/ $(addprefix $(R)$(raddbdir)/, $(RADDB_DIRS))
+INSTALL_RADDB_DIRS :=	$(R)$(raddbdir)/ $(addprefix $(R)$(raddbdir)/,$(RADDB_DIRS))
 
 # Grab files from the various subdirectories
 INSTALL_FILES := 	$(wildcard raddb/sites-available/* raddb/mods-available/*) \
 			$(addprefix raddb/,$(LOCAL_FILES)) \
 			$(addprefix raddb/certs/,$(INSTALL_CERT_FILES)) \
-			$(shell find raddb/mods-config -type f -print) \
-			$(shell find raddb/policy.d -type f -print)
+			$(call FIND_FILES,raddb/mods-config) \
+			$(call FIND_FILES,raddb/policy.d) \
+			$(call FIND_FILES,raddb/template.d)
 
 # Re-write local files to installed files, filtering out editor backups
-INSTALL_RADDB :=	$(patsubst raddb/%,$(R)$(raddbdir)/%,\
-			$(filter-out %~,$(INSTALL_FILES)))
+INSTALL_RADDB :=	$(patsubst raddb/%,$(R)$(raddbdir)/%,$(INSTALL_FILES))
 endif
 
 all: build.raddb
@@ -180,7 +180,7 @@ else
 #  Generate local certificate products when doing a non-package
 #  (i.e. developer) build.  This takes a LONG time!
 #
-$(GENERATED_CERT_FILES):
+$(GENERATED_CERT_FILES): $(wildcard raddb/certs/*cnf)
 	${Q}echo BOOTSTRAP raddb/certs/
 	${Q}$(MAKE) -C ${top_srcdir}/raddb/certs/
 endif

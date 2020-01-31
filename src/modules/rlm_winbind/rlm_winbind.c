@@ -50,8 +50,8 @@ static const CONF_PARSER module_config[] = {
 	CONF_PARSER_TERMINATOR
 };
 
-static fr_dict_t *dict_freeradius;
-static fr_dict_t *dict_radius;
+static fr_dict_t const *dict_freeradius;
+static fr_dict_t const *dict_radius;
 
 extern fr_dict_autoload_t rlm_winbind_dict[];
 fr_dict_autoload_t rlm_winbind_dict[] = {
@@ -171,7 +171,7 @@ static int winbind_group_cmp(void *instance, REQUEST *request, UNUSED VALUE_PAIR
 		goto error;
 	}
 
-	REDEBUG2("Trying to find user \"%s\" in group \"%s\"", username, check->vp_strvalue);
+	REDEBUG2("Trying to find user \"%s\" in group \"%pV\"", username, &check->data);
 
 	err = wbcCtxGetGroups(wb_ctx, username, &num_groups, &wb_groups);
 	switch (err) {
@@ -335,11 +335,11 @@ static int mod_bootstrap(void *instance, CONF_SECTION *conf)
 	inst->name = cf_section_name2(conf);
 	if (!inst->name) inst->name = cf_section_name1(conf);
 
-	if (fr_dict_enum_add_alias_next(attr_auth_type, inst->name) < 0) {
+	if (fr_dict_enum_add_name_next(fr_dict_attr_unconst(attr_auth_type), inst->name) < 0) {
 		PERROR("Failed adding %s alias", inst->name);
 		return -1;
 	}
-	inst->auth_type = fr_dict_enum_by_alias(attr_auth_type, inst->name, -1);
+	inst->auth_type = fr_dict_enum_by_name(attr_auth_type, inst->name, -1);
 
 	if (inst->group_attribute) {
 		group_attribute = inst->group_attribute;

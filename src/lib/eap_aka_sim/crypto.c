@@ -26,7 +26,7 @@
  * @author Arran Cudbard-Bell (a.cudbardb@freeradius.org)
  *
  * @copyright 2003-2018 The FreeRADIUS server project
- * @copyright 2016-2018 Network RADIUS (info@networkradius.com)
+ * @copyright 2016-2018 Network RADIUS (legal@networkradius.com)
  */
 RCSID("$Id$")
 
@@ -38,13 +38,14 @@ RCSID("$Id$")
 #include <freeradius-devel/eap/types.h>
 #include <freeradius-devel/sim/common.h>
 #include <freeradius-devel/sim/milenage.h>
-#include <freeradius-devel/util/sha1.h>
 #include <freeradius-devel/tls/base.h>
+#include <freeradius-devel/util/proto.h>
+#include <freeradius-devel/util/rand.h>
+#include <freeradius-devel/util/sha1.h>
 #include <openssl/evp.h>
 
 #include "base.h"
 #include "attrs.h"
-
 
 /** Free OpenSSL memory associated with our checkcode ctx
  *
@@ -1248,7 +1249,7 @@ void fr_aka_sim_crypto_keys_log(REQUEST *request, fr_aka_sim_keys_t *keys)
  */
 #include <stddef.h>
 #include <stdbool.h>
-#include <freeradius-devel/util/cutest.h>
+#include <freeradius-devel/util/acutest.h>
 
 /*
  *	EAP-SIM (RFC4186) GSM authentication vectors

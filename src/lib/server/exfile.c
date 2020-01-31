@@ -42,7 +42,7 @@ typedef struct {
 } exfile_entry_t;
 
 
-struct exfile_t {
+struct exfile_s {
 	uint32_t		max_entries;		//!< How many file descriptors we keep track of.
 	uint32_t		max_idle;		//!< Maximum idle time for a descriptor.
 	time_t			last_cleaned;
@@ -76,7 +76,7 @@ static inline void exfile_trigger_exec(exfile_t *ef, REQUEST *request, exfile_en
 
 	if (!ef->trigger_prefix) return;
 
-	da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal), FR_EXFILE_NAME);
+	da = fr_dict_attr_child_by_num(fr_dict_root(fr_dict_internal()), FR_EXFILE_NAME);
 	if (!da) {
 		ROPTIONAL(RERROR, ERROR, "Incomplete internal dictionary: Missing definition for \"Exfile-Name\"");
 		return;
@@ -242,7 +242,7 @@ static int exfile_open_mkdir(exfile_t *ef, char const *filename, mode_t permissi
 		if ((dirperm & 0060) != 0) dirperm |= 0010;
 		if ((dirperm & 0006) != 0) dirperm |= 0001;
 
-		if (rad_mkdir(dir, dirperm, -1, -1) < 0) {
+		if (fr_mkdir(NULL, dir, -1, dirperm, NULL, NULL) < 0) {
 			fr_strerror_printf("Failed to create directory %s: %s", dir, fr_syserror(errno));
 			talloc_free(dir);
 			return -1;

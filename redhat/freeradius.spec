@@ -1,6 +1,7 @@
 %bcond_with rlm_yubikey
 %bcond_with experimental_modules
 %bcond_with rlm_sigtran
+%bcond_with wbclient
 
 # Many distributions have extremely old versions of OpenSSL
 # if you'd like to build with the FreeRADIUS openssl packages
@@ -76,9 +77,10 @@ BuildRequires: libpcap-devel
 BuildRequires: libtalloc-devel
 BuildRequires: net-snmp-devel
 BuildRequires: net-snmp-utils
+%if %{?_with_wbclient:1}%{!?_with_wbclient:0}
 %{?el7:BuildRequires: libwbclient-devel}
 %{?el7:BuildRequires: samba-devel}
-%{?el6:BuildRequires: samba4-devel}
+%endif
 %if %{?_unitdir:1}%{!?_unitdir:0}
 BuildRequires: systemd-devel
 %endif
@@ -103,9 +105,9 @@ Requires: readline
 Requires: libtalloc
 Requires: libkqueue
 Requires: net-snmp
+%if %{?_with_wbclient:1}%{!?_with_wbclient:0}
 %{?el7:Requires: libwbclient}
-%{?el6:Requires: samba4-libs}
-%{?el6:Requires: samba4-winbind-clients}
+%endif
 Requires: zlib
 Requires: pam
 
@@ -440,6 +442,7 @@ export RADIUSD_VERSION_RELEASE="%{release}"
 %if %{?_with_developer:1}%{!?_with_developer:0}
         --enable-developer=yes \
         --enable-llvm-address-sanitizer \
+        --with-gperftools \
 %endif
         %{?_with_rlm_yubikey} \
         %{?_without_rlm_yubikey} \
@@ -737,6 +740,8 @@ fi
 # freetds
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql/main/mssql
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/sql/main/mssql/*
+%dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql/ippool/mssql
+%attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/sql/ippool/mssql/*
 # oracle
 %if %{?_with_rlm_sql_oracle:1}%{!?_with_rlm_sql_oracle:0}
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql
